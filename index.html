@@ -50,18 +50,12 @@
                  class="w-full rounded-lg border border-gray-300 bg-white px-4 py-3.5 text-lg text-right font-semibold text-gray-900 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 outline-none transition" />
         </label>
 
-        <label class="block">
-          <span class="block text-sm font-medium text-gray-700 mb-1">Average Battery Usage (%)</span>
-          <input id="usage" type="number" inputmode="decimal" step="1" min="0" max="100" required placeholder="e.g. 92"
-                 class="w-full rounded-lg border border-gray-300 bg-white px-4 py-3.5 text-lg text-right font-semibold text-gray-900 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 outline-none transition" />
-        </label>
-
         <button type="submit"
                 class="w-full rounded-lg bg-brand-600 px-4 py-4 text-base font-bold text-white hover:bg-brand-700 active:bg-brand-800 transition shadow-sm">
           Check Battery Health
         </button>
 
-        <p class="text-center text-xs text-gray-400">Rated capacity: 8,000 mAh &middot; Endurance threshold: 7 hours (applied automatically)</p>
+        <p class="text-center text-xs text-gray-400">Rated capacity: 8,000 mAh &middot; Usable-capacity factor: 0.92 &middot; Endurance threshold: 7 hours (applied automatically)</p>
       </form>
     </div>
   </main>
@@ -116,13 +110,13 @@
     const $ = (id) => document.getElementById(id);
 
     const RATED_CAPACITY = 8000;
+    const USABLE_FACTOR = 0.92;
     const MIN_THRESHOLD_HOURS = 7;
 
     const els = {
       form: $("calcForm"),
       consumed: $("consumed"),
       minutes: $("minutes"),
-      usage: $("usage"),
       modal: $("modal"),
       backdrop: $("modalBackdrop"),
       modalClose: $("modalClose"),
@@ -142,7 +136,7 @@
       badge.className = "rounded-lg px-5 py-4 text-center fluid-badge font-extrabold tracking-wide ring-1 transition-all " + tone;
     }
 
-    function openModal(realistic, threshold, valid) {
+    function openModal(realistic, valid) {
       els.modal.classList.remove("hidden");
       els.modal.classList.add("flex");
 
@@ -150,7 +144,7 @@
         setBadge(els.mStatusBadge, "bg-gray-100 text-gray-600 ring-gray-300", "INVALID INPUT");
         els.mLifeHours.textContent = "—";
         els.mRecommendation.className = "mt-5 rounded-lg bg-gray-100 border border-gray-200 px-4 py-3 text-sm text-gray-600";
-        els.mRecommendation.textContent = "Please enter valid values greater than zero for all fields.";
+        els.mRecommendation.textContent = "Please enter valid values greater than zero for Consumed Battery and Time Duration.";
         return;
       }
 
@@ -177,22 +171,20 @@
 
       const consumed = parseFloat(els.consumed.value);
       const minutes  = parseFloat(els.minutes.value);
-      const usage    = parseFloat(els.usage.value);
 
-      const valid = [consumed, minutes, usage].every((n) => Number.isFinite(n) && n > 0);
+      const valid = [consumed, minutes].every((n) => Number.isFinite(n) && n > 0);
 
       if (!valid) {
-        openModal(null, null, false);
+        openModal(null, false);
         return;
       }
 
-      const usableFactor = Math.min(usage, 100) / 100;
       const timeHours = minutes / 60;
       const avgCurrent = consumed / timeHours;
       const theoretical = RATED_CAPACITY / avgCurrent;
-      const realistic = theoretical * usableFactor;
+      const realistic = theoretical * USABLE_FACTOR;
 
-      openModal(realistic, MIN_THRESHOLD_HOURS, true);
+      openModal(realistic, true);
     });
 
     els.modalClose.addEventListener("click", closeModal);
