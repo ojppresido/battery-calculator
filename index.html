@@ -6,6 +6,7 @@
   <title>BVAS Device Health &amp; Inventory Worksheet | ICT Department</title>
   <meta name="theme-color" content="#0f2354" />
   <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col">
 
@@ -161,6 +162,7 @@
         <button type="button" id="saveBtn" class="btn-tool">Save</button>
         <button type="button" id="loadBtn" class="btn-tool">Load</button>
         <button type="button" id="clearBtn" class="btn-tool btn-tool-danger">Clear All</button>
+        <span id="dbStatus" class="hidden"></span>
       </div>
 
       <div class="table-scroll mt-5">
@@ -299,10 +301,107 @@
     }
     const STATE_LOOKUP = {};
     STATES.forEach((s) => { STATE_LOOKUP[normalizeState(s)] = s; });
+    STATE_LOOKUP["FCT"] = "FCT ABUJA";
+    STATE_LOOKUP["ABUJA"] = "FCT ABUJA";
     const LOCKED_STATE = STATE_LOOKUP[normalizeState(new URLSearchParams(window.location.search).get("state"))] || null;
 
     function storageKey() {
       return LOCKED_STATE ? STORAGE_KEY_BASE + "_" + LOCKED_STATE.replace(/\s+/g, "_") : STORAGE_KEY_BASE;
+    }
+
+    /* ---------- Supabase (per-state database) ----------
+       SUPABASE_URL / SUPABASE_ANON_KEY from:
+       Dashboard -> Project Settings -> API -> Project URL / anon public key.
+       Leave empty to run fully offline (localStorage only).
+       When a ?state= URL is used AND the keys are set, the app syncs to
+       the table bvas_devices_<state> (e.g. bvas_devices_ogun). */
+    const SUPABASE_URL = "";
+    const SUPABASE_ANON_KEY = "";
+
+    const DB = { enabled: false, client: null, table: null };
+
+    function stateTable(name) {
+      return "bvas_devices_" + String(name).toLowerCase().replace(/\s+/g, "_");
+    }
+
+    function configureDb() {
+      if (!LOCKED_STATE || !SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+      if (!window.supabase) return;
+      try {
+        DB.client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        DB.table = stateTable(LOCKED_STATE);
+        DB.enabled = true;
+      } catch (e) {
+        DB.enabled = false;
+      }
+    }
+
+    function deviceToRow(d) {
+      const c = d.comp || {};
+      return {
+        device_id: d.deviceId,
+        ts: d.ts || Date.now(),
+        sim_type: d.simType || null,
+        state: d.state || LOCKED_STATE,
+        screen: !!c.screen, camera: !!c.camera, fingerprint: !!c.fingerprint,
+        sim: !!c.sim, charging: !!c.charging, wifi: !!c.wifi, gps: !!c.gps,
+        battery_ok: d.batteryOk,
+        battery_hours: d.hours,
+        status: d.status || null,
+        remarks: d.remarks || null
+      };
+    }
+
+    function rowToDevice(r) {
+      return {
+        deviceId: r.device_id,
+        ts: r.ts,
+        simType: r.sim_type,
+        state: r.state,
+        comp: {
+          screen: !!r.screen, camera: !!r.camera, fingerprint: !!r.fingerprint,
+          sim: !!r.sim, charging: !!r.charging, wifi: !!r.wifi, gps: !!r.gps
+        },
+        batteryOk: r.battery_ok,
+        hours: r.battery_hours,
+        status: r.status,
+        remarks: r.remarks
+      };
+    }
+
+    async function dbUpsert(d) {
+      if (!DB.enabled) return true;
+      try {
+        const { error } = await DB.client.from(DB.table).upsert(deviceToRow(d), { onConflict: "device_id" });
+        if (error) throw error;
+        return true;
+      } catch (e) { return false; }
+    }
+
+    async function dbDelete(id) {
+      if (!DB.enabled) return true;
+      try {
+        const { error } = await DB.client.from(DB.table).delete().eq("device_id", id);
+        if (error) throw error;
+        return true;
+      } catch (e) { return false; }
+    }
+
+    async function dbFetch() {
+      if (!DB.enabled) return null;
+      const { data, error } = await DB.client.from(DB.table)
+        .select("*").order("ts", { ascending: true });
+      if (error) throw error;
+      return (Array.isArray(data) ? data : []).map(rowToDevice);
+    }
+
+    async function dbClear() {
+      if (!DB.enabled) return true;
+      try {
+        const { error } = await DB.client.from(DB.table).delete().neq("device_id", "");
+        if (error) throw error;
+        return true;
+      } catch (e) { return false; }
     }
 
     const els = {
@@ -328,6 +427,7 @@
       saveBtn: $("saveBtn"),
       loadBtn: $("loadBtn"),
       clearBtn: $("clearBtn"),
+      dbStatus: $("dbStatus"),
       signOfficer: $("signOfficer"),
       signReviewer: $("signReviewer"),
       modal: $("modal"),
@@ -532,6 +632,7 @@
           if (!d.remarks || d.remarks === "Battery test pending") d.remarks = autoRemarks(d);
           renderTable();
           persist();
+          if (DB.enabled) dbUpsert(d).then((ok) => setDbStatus(ok ? "ok" : "warn", ok ? "online \u00b7 " + DB.table.replace(/^bvas_devices_/, "") : "offline \u00b7 saved locally"));
           flash(`Battery result <strong>${fmt(pending.hours, 2)} h</strong> (${d.batteryOk ? "OK" : "WEAK"}) accepted and attached to <strong>${esc(d.deviceId)}</strong> &rarr; ${d.status}.`, false);
         }
       } else if (retestTarget) {
@@ -560,7 +661,7 @@
       return digits.slice(0, 3) + "-" + digits.slice(3);
     }
 
-    function saveDevice() {
+    async function saveDevice() {
       const id = maskDeviceId(els.deviceId.value).replace(/-$/, "");
       if (!id) return flash("Enter the Device ID.", true);
 
@@ -588,6 +689,10 @@
 
       renderTable();
       persist();
+      if (DB.enabled) {
+        const ok = await dbUpsert(d);
+        setDbStatus(ok ? "ok" : "warn", ok ? "online \u00b7 " + DB.table.replace(/^bvas_devices_/, "") : "offline \u00b7 saved locally");
+      }
       resetForm();
       flash(`${d.deviceId} ${existing ? "updated" : "saved"} on the sheet${d.batteryOk === null ? " — battery test still pending." : "."}`, false);
     }
@@ -647,6 +752,7 @@
             devices = devices.filter((d) => d.deviceId !== id);
             renderTable();
             persist();
+            if (DB.enabled) dbDelete(id);
           }
         });
       });
@@ -711,6 +817,45 @@
       renderTable();
     }
 
+    /* ---------- Supabase sync helpers ---------- */
+
+    function setDbStatus(mode, msg) {
+      const el = els.dbStatus;
+      if (mode === "off") {
+        el.className = "hidden";
+        el.textContent = "";
+        return;
+      }
+      if (mode === "ok") {
+        el.className = "ring-1 uppercase tracking-wide rounded-full px-2.5 py-1 text-xs font-bold bg-green-100 text-green-800 ring-green-300";
+      } else {
+        el.className = "ring-1 uppercase tracking-wide rounded-full px-2.5 py-1 text-xs font-bold bg-orange-100 text-orange-800 ring-orange-300";
+      }
+      el.textContent = msg;
+    }
+
+    async function loadFromDb() {
+      if (!DB.enabled) return;
+      setDbStatus("warn", "syncing\u2026");
+      try {
+        const rows = await dbFetch();
+        const byId = new Map();
+        devices.forEach((d) => byId.set(d.deviceId, d));
+        rows.forEach((r) => {
+          const ex = byId.get(r.deviceId) || {};
+          byId.set(r.deviceId, Object.assign({}, ex, r));
+        });
+        devices = Array.from(byId.values());
+        devices.forEach((d) => { d.status = statusOf(d); d.comp = d.comp || {}; });
+        devices.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+        renderTable();
+        persist();
+        setDbStatus("ok", "online \u00b7 " + DB.table.replace(/^bvas_devices_/, ""));
+      } catch (e) {
+        setDbStatus("warn", "offline \u00b7 showing local copy");
+      }
+    }
+
     function download(name, text, type) {
       const url = URL.createObjectURL(new Blob([text], { type: type }));
       const a = document.createElement("a");
@@ -762,6 +907,9 @@
       if (saved) restore(JSON.parse(saved));
     } catch (e) {}
 
+    configureDb();
+    if (DB.enabled) loadFromDb();
+
     els.form.addEventListener("submit", (e) => { e.preventDefault(); runAssessment(); });
     els.deviceId.addEventListener("input", () => {
       const masked = maskDeviceId(els.deviceId.value);
@@ -789,6 +937,7 @@
         devices = [];
         renderTable();
         persist();
+        if (DB.enabled) dbClear().then((ok) => setDbStatus(ok ? "off" : "warn", ok ? "" : "offline \u00b7 clear stays local"));
       }
     });
 
