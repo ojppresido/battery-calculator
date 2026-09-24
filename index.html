@@ -22,6 +22,7 @@
       <div>
         <h1 class="fluid-title font-bold leading-tight">BVAS Device Health &amp; Inventory Worksheet</h1>
         <p class="text-brand-100 text-xs sm:text-sm mt-0.5 tracking-wide uppercase">ICT Department</p>
+        <span id="stateChip" class="hidden mt-1 inline-block rounded-full bg-white/10 px-3 py-1 text-xs font-bold uppercase tracking-wider"></span>
       </div>
     </div>
     <div class="h-1 bg-gradient-to-r from-green-400 via-brand-500 to-green-400"></div>
@@ -95,6 +96,7 @@
         <label class="block">
           <span class="block text-sm font-medium text-gray-700 mb-1">State</span>
           <select id="fieldState" class="field"></select>
+          <span id="stateLockNote" class="hidden mt-1 block text-xs font-semibold text-brand-700"></span>
         </label>
       </div>
 
@@ -245,6 +247,8 @@
           FUNCTIONAL
         </div>
 
+        <p id="mTarget" class="hidden mt-4 rounded-lg bg-brand-50 border border-brand-200 px-4 py-2.5 text-sm font-bold text-brand-800 text-center"></p>
+
         <div class="mt-5 rounded-lg bg-brand-800 text-white text-center px-4 py-8">
           <p class="text-xs uppercase tracking-widest text-brand-200 font-medium">Estimated Battery Life</p>
           <div class="mt-2 fluid-num font-black leading-none" id="mLifeHours">9.86</div>
@@ -269,7 +273,7 @@
     const RATED_CAPACITY = 8000;
     const USABLE_FACTOR = 0.92;
     const MIN_THRESHOLD_HOURS = 7;
-    const STORAGE_KEY = "bvas_inventory_v3";
+    const STORAGE_KEY_BASE = "bvas_inventory_v3";
 
     const COMPONENTS = [
       { key: "screen",      label: "Screen" },
@@ -285,6 +289,21 @@
       "CROSS RIVER","DELTA","EBONYI","EDO","EKITI","ENUGU","GOMBE","IMO","JIGAWA","KADUNA","KANO","KATSINA",
       "KEBBI","KOGI","KWARA","LAGOS","NASSARAWA","NIGER","OGOMO","OSUN","OYO","PLATEAU","RIVERS","SOKOTO",
       "TARABA","YOBE","ZAMFARA","FCT ABUJA"];
+
+    function normalizeState(s) {
+      return String(s || "").toUpperCase()
+        .replace(/[-_\s]+/g, " ")
+        .replace(/\s*STATE\b/g, "")
+        .replace(/\s*FCT\b/g, "")
+        .trim();
+    }
+    const STATE_LOOKUP = {};
+    STATES.forEach((s) => { STATE_LOOKUP[normalizeState(s)] = s; });
+    const LOCKED_STATE = STATE_LOOKUP[normalizeState(new URLSearchParams(window.location.search).get("state"))] || null;
+
+    function storageKey() {
+      return LOCKED_STATE ? STORAGE_KEY_BASE + "_" + LOCKED_STATE.replace(/\s+/g, "_") : STORAGE_KEY_BASE;
+    }
 
     const els = {
       form: $("calcForm"),
@@ -317,7 +336,8 @@
       mDone: $("mDone"),
       mStatusBadge: $("mStatusBadge"),
       mLifeHours: $("mLifeHours"),
-      mRecommendation: $("mRecommendation")
+      mRecommendation: $("mRecommendation"),
+      mTarget: $("mTarget")
     };
 
     let pending = null;      // { hours, ok } — battery result awaiting attach
@@ -437,9 +457,16 @@
 
     /* ---------- battery assessment ---------- */
 
-    function openModal(realistic, valid) {
+    function openModal(realistic, valid, retestId) {
       els.modal.classList.remove("hidden");
       els.modal.classList.add("flex");
+
+      const mt = els.mTarget;
+      mt.className = "mt-4 rounded-lg bg-brand-50 border border-brand-200 px-4 py-2.5 text-sm font-bold text-brand-800 text-center" +
+        (retestId && valid ? "" : " hidden");
+      mt.textContent = retestId && valid
+        ? "Battery result " + fmt(realistic, 2) + "h attached to " + retestId + "."
+        : "";
 
       if (!valid) {
         setBadge(els.mStatusBadge, "bg-gray-100 text-gray-600 ring-gray-300", "INVALID INPUT");
@@ -474,7 +501,7 @@
       const valid = [consumed, minutes].every((n) => Number.isFinite(n) && n > 0);
 
       if (!valid) {
-        openModal(null, false);
+        openModal(null, false, retestTarget);
         return;
       }
 
@@ -486,19 +513,29 @@
       setBattery(pending.ok, realistic);
       renderFinalStatus();
       renderBanner();
-      openModal(realistic, true);
+
+      const targetId = retestTarget;
+      if (targetId) applyRetest();
+
+      openModal(realistic, true, targetId);
     }
 
     function applyRetest() {
       const d = findDevice(retestTarget);
-      if (d && pending) {
-        d.hours = pending.hours;
-        d.batteryOk = pending.ok;
-        d.status = statusOf(d);
-        if (!d.remarks || d.remarks === "Battery test pending") d.remarks = autoRemarks(d);
-        renderTable();
-        persist();
-        flash(`Battery result (${fmt(pending.hours, 2)}h) attached to ${d.deviceId}.`, false);
+      if (d) {
+        if (!pending) {
+          flash(`Battery test for <strong>${esc(d.deviceId)}</strong> cancelled — no result to attach.`, true);
+        } else {
+          d.hours = pending.hours;
+          d.batteryOk = pending.ok;
+          d.status = statusOf(d);
+          if (!d.remarks || d.remarks === "Battery test pending") d.remarks = autoRemarks(d);
+          renderTable();
+          persist();
+          flash(`Battery result <strong>${fmt(pending.hours, 2)} h</strong> (${d.batteryOk ? "OK" : "WEAK"}) accepted and attached to <strong>${esc(d.deviceId)}</strong> &rarr; ${d.status}.`, false);
+        }
+      } else if (retestTarget) {
+        flash(`Device <strong>${esc(retestTarget)}</strong> no longer on the sheet — result not attached.`, true);
       }
       pending = null;
       retestTarget = null;
@@ -658,7 +695,7 @@
     }
 
     function persist() {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot())); } catch (e) {}
+      try { localStorage.setItem(storageKey(), JSON.stringify(snapshot())); } catch (e) {}
     }
 
     function restore(data) {
@@ -702,7 +739,17 @@
     /* ---------- wiring ---------- */
 
     els.fieldState.innerHTML = STATES.map((s) =>
-      `<option value="${s}"${s === "OGUN" ? " selected" : ""}>${s}</option>`).join("");
+      `<option value="${s}"${s === (LOCKED_STATE || "OGUN") ? " selected" : ""}>${s}</option>`).join("");
+
+    if (LOCKED_STATE) {
+      els.fieldState.value = LOCKED_STATE;
+      els.fieldState.disabled = true;
+      $("stateChip").textContent = "State: " + LOCKED_STATE;
+      $("stateChip").classList.remove("hidden");
+      const note = $("stateLockNote");
+      note.textContent = "Locked \u2014 this worksheet is for " + LOCKED_STATE + " only.";
+      note.classList.remove("hidden");
+    }
 
     buildChecklist();
     renderTable();
@@ -711,7 +758,7 @@
     els.sheetDate.value = today.toISOString().slice(0, 10);
 
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(storageKey());
       if (saved) restore(JSON.parse(saved));
     } catch (e) {}
 
@@ -731,7 +778,7 @@
     els.saveBtn.addEventListener("click", () => { persist(); flash("Worksheet saved on this device.", false); });
     els.loadBtn.addEventListener("click", () => {
       try {
-        const saved = localStorage.getItem(STORAGE_KEY);
+        const saved = localStorage.getItem(storageKey());
         if (!saved) return flash("No saved worksheet found on this device.", true);
         restore(JSON.parse(saved));
         flash("Worksheet loaded.", false);
