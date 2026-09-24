@@ -320,19 +320,19 @@
     STATES.forEach((s) => { STATE_LOOKUP[normalizeState(s)] = s; });
     STATE_LOOKUP["FCT"] = "FCT ABUJA";
     STATE_LOOKUP["ABUJA"] = "FCT ABUJA";
-    // State comes from the URL path: /battery-calculator/ogun  (or /ogun on a LAN root).
-    // Legacy ?state=ogun links still work as a fallback. Same LOCKED_STATE => same
-    // localStorage key and DB table, so existing data carries over between the two forms.
+    // State comes from the URL path ONLY: /battery-calculator/ogun  (or /ogun on a LAN root).
+    // Legacy ?state=... URLs are deliberately ignored so they can't reach the worksheet.
     function stateFromPath() {
       const segs = String(window.location.pathname || "/").split("/").filter(Boolean);
       let last = segs[segs.length - 1];
       if (last === "index.html") last = segs[segs.length - 2] || "";
       return last || "";
     }
-    const RAW_STATE = stateFromPath() || new URLSearchParams(window.location.search).get("state") || "";
+    const RAW_STATE = stateFromPath();
     const LOCKED_STATE = STATE_LOOKUP[normalizeState(RAW_STATE)] || null;
 
-    const CALC_ONLY = false;
+    // Calculator only on the shared root; every state path gets the full worksheet.
+    const CALC_ONLY = !LOCKED_STATE;
 
     function storageKey() {
       return LOCKED_STATE ? STORAGE_KEY_BASE + "_" + LOCKED_STATE.replace(/\s+/g, "_") : STORAGE_KEY_BASE;
@@ -342,7 +342,7 @@
        Talks to Supabase's REST API (PostgREST) directly with fetch —
        no external SDK/CDN required. Keys from:
        Dashboard -> Project Settings -> API -> Project URL / anon public key.
-       Only active on a state URL (path or legacy ?state=); always syncs to bvas_devices_<state>. */
+       Only active on a state PATH URL; ?state=... params are ignored. */
     const SUPABASE_URL = "https://fabdxxznbalfnsbttqqn.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhYmR4eHpuYmFsZm5zYnR0cXFuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAyNDQ0MTQsImV4cCI6MjEwNTgyMDQxNH0.NcQRrm9iUop2dutFfPpXwJ6KgTdkyIgj8CZdEdcbaCE";
 
@@ -1008,7 +1008,7 @@
     els.footerMeta.textContent = CALC_ONLY
       ? (LOCKED_STATE ? "Battery calculator \u00b7 " + LOCKED_STATE : "Battery calculator")
       : (LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet");
-    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 12 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
+    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 13 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
     if (CALC_ONLY) document.body.classList.add("calc-only");
 
     if (!CALC_ONLY) {
