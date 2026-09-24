@@ -304,9 +304,9 @@
 
     const FUNCTIONAL_COMPONENTS = COMPONENTS.filter((c) => c.key !== "sim");
 
-    const STATES = ["OGUN","ABIA","ADAMAWA","AKWA IBOM","ALABA","ANAMBRA","BAUCHI","BAYELSA","BENUE","BORNO",
+    const STATES = ["OGUN","ONDO","ABIA","ADAMAWA","AKWA IBOM","ANAMBRA","BAUCHI","BAYELSA","BENUE","BORNO",
       "CROSS RIVER","DELTA","EBONYI","EDO","EKITI","ENUGU","GOMBE","IMO","JIGAWA","KADUNA","KANO","KATSINA",
-      "KEBBI","KOGI","KWARA","LAGOS","NASSARAWA","NIGER","OGOMO","OSUN","OYO","PLATEAU","RIVERS","SOKOTO",
+      "KEBBI","KOGI","KWARA","LAGOS","NASSARAWA","NIGER","OSUN","OYO","PLATEAU","RIVERS","SOKOTO",
       "TARABA","YOBE","ZAMFARA","FCT ABUJA"];
 
     function normalizeState(s) {
@@ -1008,7 +1008,7 @@
     els.footerMeta.textContent = CALC_ONLY
       ? (LOCKED_STATE ? "Battery calculator \u00b7 " + LOCKED_STATE : "Battery calculator")
       : (LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet");
-    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 11 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
+    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 12 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
     if (CALC_ONLY) document.body.classList.add("calc-only");
 
     if (!CALC_ONLY) {
