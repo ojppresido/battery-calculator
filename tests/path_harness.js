@@ -96,7 +96,11 @@ function caseFull(name, search, pathname, expectState, expectKey) {
   console.log(String(r));
 }
 
-console.log("=== root LAN (/) — calculator only ===");
+console.log("=== /battery-calculator/states/ogun/ — full (new nested form, pages) ===");
+caseFull("pages states/ogun", "", "/battery-calculator/states/ogun/", "OGUN", "bvas_inventory_v3_OGUN");
+console.log("=== /states/kano/ — full (new nested form, lan) ===");
+caseFull("lan states/kano", "", "/states/kano/", "KANO", "bvas_inventory_v3_KANO");
+console.log("=== LAN root (/) — calculator only ===");
 caseCalcOnly("lan root /", "", "/");
 console.log("=== root Pages (/battery-calculator/) — calculator only ===");
 caseCalcOnly("pages root /battery-calculator/", "", "/battery-calculator/");

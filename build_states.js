@@ -15,25 +15,27 @@ function slug(s) {
 
 let made = 0;
 const slugs = states.map(slug);
+const OUT = path.join(ROOT, "states");
+fs.mkdirSync(OUT, { recursive: true });
 for (const s of states) {
-  const dir = path.join(ROOT, slug(s));
+  const dir = path.join(OUT, slug(s));
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "index.html"), html);
   fs.writeFileSync(path.join(dir, "styles.css"), css);
   made++;
 }
 
-// Prune generated state dirs that are no longer in the STATES list.
-for (const name of fs.readdirSync(ROOT)) {
+// Prune generated state dirs (inside states/) that are no longer in the STATES list.
+for (const name of fs.readdirSync(OUT)) {
   if (slugs.includes(name)) continue;
-  const dir = path.join(ROOT, name);
+  const dir = path.join(OUT, name);
   if (!fs.statSync(dir).isDirectory()) continue;
   if (!/^[a-z0-9-]+$/.test(name)) continue;
   const ih = path.join(dir, "index.html");
   const cs = path.join(dir, "styles.css");
   if (!fs.existsSync(ih) || !fs.existsSync(cs)) continue;
   fs.rmSync(dir, { recursive: true, force: true });
-  console.log("Removed stale dir: " + name);
+  console.log("Removed stale dir: states/" + name);
 }
 
-console.log("Generated " + made + " per-state directories: " + slugs.join(", "));
+console.log("Generated " + made + " state pages under states/: " + slugs.join(", "));

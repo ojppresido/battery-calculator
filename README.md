@@ -13,12 +13,14 @@ State is read from the URL **path only** (`?state=...` params are deliberately i
 | URL | Behaviour |
 |---|---|
 | `/battery-calculator/` | Shared root — **calculator only** |
-| `/battery-calculator/ogun/` | Ogun full worksheet + Supabase sync |
-| `/battery-calculator/kano/` | Kano full worksheet + Supabase sync |
-| `/battery-calculator/fct-abuja/` | FCT ABUJA full worksheet + Supabase sync |
+| `/battery-calculator/states/ogun/` | Ogun full worksheet + Supabase sync |
+| `/battery-calculator/states/kano/` | Kano full worksheet + Supabase sync |
+| `/battery-calculator/states/fct-abuja/` | FCT ABUJA full worksheet + Supabase sync |
 
 Each state resolves through `STATE_LOOKUP` in `index.html` (`fct-abuja` → `FCT ABUJA`).
 The 37 real states are `OGUN, ONDO, ABIA, …, ZAMFARA, FCT ABUJA` (no placeholders).
+The `/states/` folder is optional nesting for a tidy repo — the app detects the state from the
+last path segment, so `…/states/ogun/` and `…/ogun/` both work.
 
 ## Repository layout
 
@@ -26,8 +28,8 @@ The 37 real states are `OGUN, ONDO, ABIA, …, ZAMFARA, FCT ABUJA` (no placehold
 |---|---|
 | `index.html` | The app (calculator + worksheet + Supabase REST client). **Authoritative source.** |
 | `styles.css` | Styling; linked cache-busted (`styles.css?v=4`). |
-| `build_states.js` | Regenerates one `<state>/` directory (copy of `index.html` + `styles.css`) per state so path URLs resolve on static hosts. Also prunes state dirs no longer in `STATES`. |
-| `<state>/` (e.g. `ogun/`, `ondo/`) | Generated per-state landing pages. Do not hand-edit. |
+| `build_states.js` | Regenerates one page under `states/<state>/` (copy of `index.html` + `styles.css`) per state so path URLs resolve on static hosts. Also prunes state dirs no longer in `STATES`. |
+| `states/<state>/` (e.g. `states/ogun/`, `states/ondo/`) | Generated per-state landing pages. Do not hand-edit. |
 | `tests/` | Offline logic harnesses (no network needed): `harness.js` (full worksheet), `db_harness.js` (ogun + mock Supabase), `path_harness.js` (URL-shape matrix incl. root/calc-only and ignored `?state=`). |
 | `scripts/export_data.js` | Pulls every `bvas_devices_*` table into one JSON backup (read-only; uses the public anon key). |
 | `supabase/migrations/` | `0001` (all per-state tables + RLS), `0002` (added real `ONDO`, dropped placeholder `ALABA`/`OGOMO`). |
@@ -42,7 +44,7 @@ Every change starts in `index.html`:
 4. Commit + push to `main` — GitHub Pages auto-deploys.
 
 Adding/removing a state: change the `STATES` array in `index.html`, regenerate, and (for the DB) add a
-Supabase migration mirroring `0002` (drop old table / create new one). Never edit `<state>/` files by hand.
+Supabase migration mirroring `0002` (drop old table / create new one). Never edit `states/<state>/` files by hand.
 
 ## Database (Supabase)
 
