@@ -318,7 +318,7 @@
     STATE_LOOKUP["ABUJA"] = "FCT ABUJA";
     const LOCKED_STATE = STATE_LOOKUP[normalizeState(new URLSearchParams(window.location.search).get("state"))] || null;
 
-    const CALC_ONLY = typeof window !== "undefined" && window.__CALC_ONLY === false ? false : !!LOCKED_STATE;
+    const CALC_ONLY = typeof window !== "undefined" && window.__CALC_ONLY === false ? false : LOCKED_STATE !== "OGUN";
 
     function storageKey() {
       return LOCKED_STATE ? STORAGE_KEY_BASE + "_" + LOCKED_STATE.replace(/\s+/g, "_") : STORAGE_KEY_BASE;
@@ -966,7 +966,7 @@
     els.footerMeta.textContent = CALC_ONLY
       ? (LOCKED_STATE ? "Battery calculator \u00b7 " + LOCKED_STATE : "Battery calculator")
       : (LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet");
-    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 5 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
+    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 6 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
     if (CALC_ONLY) document.body.classList.add("calc-only");
 
     if (!CALC_ONLY) {
