@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Per-state BVAS device health and inventory worksheet for the ICT Department." />
   <title>BVAS Device Health &amp; Inventory Worksheet | ICT Department</title>
   <meta name="theme-color" content="#0f2354" />
   <link rel="stylesheet" href="styles.css" />
@@ -19,10 +20,17 @@
           <path d="M6 11h7" stroke-linecap="round" />
         </svg>
       </div>
-      <div>
+      <div class="min-w-0 flex-1">
         <h1 class="fluid-title font-bold leading-tight">BVAS Device Health &amp; Inventory Worksheet</h1>
         <p class="text-brand-100 text-xs sm:text-sm mt-0.5 tracking-wide uppercase">ICT Department</p>
-        <span id="stateChip" class="hidden mt-1 inline-block rounded-full bg-white/10 px-3 py-1 text-xs font-bold uppercase tracking-wider"></span>
+        <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <span id="stateChip" class="hidden items-center gap-1 rounded-full bg-white/10 ring-1 ring-white/20 px-3 py-1 text-xs font-bold uppercase tracking-wider"></span>
+          <span id="statusPill" class="hidden items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider">
+            <span id="statusDot" class="h-2 w-2 rounded-full"></span>
+            <span id="statusText"></span>
+          </span>
+          <span id="countPill" class="hidden items-center rounded-full bg-white/10 ring-1 ring-white/20 px-3 py-1 text-xs font-bold uppercase tracking-wider"></span>
+        </div>
       </div>
     </div>
     <div class="h-1 bg-gradient-to-r from-green-400 via-brand-500 to-green-400"></div>
@@ -155,13 +163,19 @@
         </div>
       </div>
 
+      <div id="stats" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 print:hidden"></div>
+
       <div class="flex flex-wrap gap-2 mt-5 print:hidden">
         <button type="button" id="printBtn" class="btn-tool btn-tool-primary">Print / Export to PDF</button>
         <button type="button" id="csvBtn" class="btn-tool">Export CSV</button>
         <button type="button" id="saveBtn" class="btn-tool">Save</button>
         <button type="button" id="loadBtn" class="btn-tool">Load</button>
         <button type="button" id="clearBtn" class="btn-tool btn-tool-danger">Clear All</button>
-        <span id="dbStatus" class="hidden"></span>
+      </div>
+
+      <div class="mt-5 print:hidden">
+        <input id="filterInput" type="search" autocomplete="off" spellcheck="false"
+               placeholder="Filter by Device ID…" class="field field-sm" aria-label="Filter by Device ID" />
       </div>
 
       <div class="table-scroll mt-5">
@@ -225,7 +239,7 @@
     <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
       <span class="font-semibold text-white uppercase tracking-wider">ICT Department</span>
       <span class="text-brand-300">BVAS Field Device Maintenance Tool &middot; build 3 (REST&ndash;DB)</span>
-      <span>Page 15</span>
+      <span id="footerMeta" class="uppercase tracking-wider">Shared worksheet</span>
     </div>
   </footer>
 
@@ -280,11 +294,13 @@
       { key: "screen",      label: "Screen" },
       { key: "camera",      label: "Camera (Front & Back)" },
       { key: "fingerprint", label: "Fingerprint Scanner" },
-      { key: "sim",         label: "SIM Functional" },
+      { key: "sim",         label: "SIM Slot" },
       { key: "charging",    label: "Charging Ports" },
       { key: "wifi",        label: "Wi-Fi" },
       { key: "gps",         label: "GPS" }
     ];
+
+    const FUNCTIONAL_COMPONENTS = COMPONENTS.filter((c) => c.key !== "sim");
 
     const STATES = ["OGUN","ABIA","ADAMAWA","AKWA IBOM","ALABA","ANAMBRA","BAUCHI","BAYELSA","BENUE","BORNO",
       "CROSS RIVER","DELTA","EBONYI","EDO","EKITI","ENUGU","GOMBE","IMO","JIGAWA","KADUNA","KANO","KATSINA",
@@ -449,7 +465,13 @@
       saveBtn: $("saveBtn"),
       loadBtn: $("loadBtn"),
       clearBtn: $("clearBtn"),
-      dbStatus: $("dbStatus"),
+      stats: $("stats"),
+      filterInput: $("filterInput"),
+      statusPill: $("statusPill"),
+      statusDot: $("statusDot"),
+      statusText: $("statusText"),
+      countPill: $("countPill"),
+      footerMeta: $("footerMeta"),
       signOfficer: $("signOfficer"),
       signReviewer: $("signReviewer"),
       modal: $("modal"),
@@ -494,7 +516,7 @@
     }
 
     function statusOf(d) {
-      const hw = Object.values(d.comp).every(Boolean);
+      const hw = FUNCTIONAL_COMPONENTS.every((c) => d.comp[c.key]);
       if (!hw) return "NON-FUNCTIONAL";
       if (d.batteryOk === true) return "FUNCTIONAL";
       if (d.batteryOk === false) return "BATTERY REPLACEMENT REQUIRED";
@@ -528,7 +550,7 @@
     }
 
     function hardwareAllTicked() {
-      return COMPONENTS.every((c) => isChecked(c.key));
+      return FUNCTIONAL_COMPONENTS.every((c) => isChecked(c.key));
     }
 
     function renderFinalStatus() {
@@ -743,11 +765,32 @@
       return `<span class="tag tag-pending">&ndash; pending</span>`;
     }
 
+    function renderStats() {
+      const count = (s) => devices.filter((d) => d.status === s).length;
+      els.stats.innerHTML = `
+        <div class="stat-card"><span class="stat-label">Devices Checked</span><span class="stat-value stat-brand">${devices.length}</span></div>
+        <div class="stat-card"><span class="stat-label">Functional</span><span class="stat-value stat-green">${count("FUNCTIONAL")}</span></div>
+        <div class="stat-card"><span class="stat-label">Battery Replacement</span><span class="stat-value stat-orange">${count("BATTERY REPLACEMENT REQUIRED")}</span></div>
+        <div class="stat-card"><span class="stat-label">Non-functional</span><span class="stat-value stat-red">${count("NON-FUNCTIONAL")}</span></div>`;
+    }
+
     function renderTable() {
+      renderStats();
+      els.countPill.classList.remove("hidden");
+      els.countPill.textContent = devices.length + " device" + (devices.length === 1 ? "" : "s");
+
+      const term = (els.filterInput.value || "").trim().toUpperCase();
+      const shown = term ? devices.filter((d) => d.deviceId.toUpperCase().includes(term)) : devices;
+
       if (!devices.length) {
         els.inventoryBody.innerHTML = `<tr class="empty-row"><td colspan="13">No device captured yet. Complete step 2 (and run a battery test in step 1 when ready).</td></tr>`;
+      } else if (!shown.length) {
+        els.inventoryBody.innerHTML = `<tr class="empty-row"><td colspan="13">No device with ID matching &ldquo;${esc(term)}&rdquo; was found.</td></tr>`;
       } else {
-        els.inventoryBody.innerHTML = devices.map((d, i) => `
+        const shownIds = new Set(shown.map((d) => d.deviceId));
+        els.inventoryBody.innerHTML = devices.map((d, i) => {
+          if (!shownIds.has(d.deviceId)) return "";
+          return `
           <tr>
           <td class="c col-sn">${i + 1}</td>
           <td class="id sticky-col sticky-col-2">${esc(d.deviceId)}</td>
@@ -763,7 +806,8 @@
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
           </td>
-        </tr>`).join("");
+        </tr>`;
+        }).join("");
       }
 
       els.inventoryBody.querySelectorAll(".row-btn").forEach((btn) => {
@@ -842,18 +886,21 @@
     /* ---------- Supabase sync helpers ---------- */
 
     function setDbStatus(mode, msg) {
-      const el = els.dbStatus;
-      if (mode === "off") {
-        el.className = "hidden";
-        el.textContent = "";
-        return;
-      }
+      const pill = els.statusPill, dot = els.statusDot, text = els.statusText;
+      if (!pill || !LOCKED_STATE) return;
+      pill.classList.remove("hidden");
+      if (mode === "off") { pill.classList.add("hidden"); return; }
       if (mode === "ok") {
-        el.className = "ring-1 uppercase tracking-wide rounded-full px-2.5 py-1 text-xs font-bold bg-green-100 text-green-800 ring-green-300";
+        pill.className = "items-center gap-1.5 rounded-full ring-1 px-3 py-1 text-xs font-bold uppercase tracking-wider inline-flex bg-green-100 text-green-800 ring-green-300";
+        dot.className = "h-2 w-2 rounded-full bg-green-500";
+        text.textContent = "Online \u00b7 " + LOCKED_STATE;
+        pill.title = "Last sync: " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       } else {
-        el.className = "ring-1 uppercase tracking-wide rounded-full px-2.5 py-1 text-xs font-bold bg-orange-100 text-orange-800 ring-orange-300";
+        pill.className = "items-center gap-1.5 rounded-full ring-1 px-3 py-1 text-xs font-bold uppercase tracking-wider inline-flex bg-orange-100 text-orange-800 ring-orange-300";
+        dot.className = "h-2 w-2 rounded-full bg-orange-500";
+        text.textContent = msg || "Offline";
+        pill.title = "";
       }
-      el.textContent = msg;
     }
 
     async function loadFromDb() {
@@ -913,10 +960,12 @@
       els.fieldState.disabled = true;
       $("stateChip").textContent = "State: " + LOCKED_STATE;
       $("stateChip").classList.remove("hidden");
+      $("stateChip").classList.add("inline-flex");
       const note = $("stateLockNote");
       note.textContent = "Locked \u2014 this worksheet is for " + LOCKED_STATE + " only.";
       note.classList.remove("hidden");
     }
+    els.footerMeta.textContent = LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet";
 
     buildChecklist();
     renderTable();
@@ -954,12 +1003,13 @@
         flash("Worksheet loaded.", false);
       } catch (e) { flash("Saved worksheet could not be read.", true); }
     });
+    els.filterInput.addEventListener("input", renderTable);
     els.clearBtn.addEventListener("click", () => {
       if (!devices.length || confirm("Clear all captured devices from the inventory sheet?")) {
         devices = [];
         renderTable();
         persist();
-        if (DB.enabled) dbClear().then((ok) => setDbStatus(ok ? "off" : "warn", ok ? "" : "offline \u00b7 clear stays local"));
+        if (DB.enabled) dbClear().then((ok) => setDbStatus(ok ? "ok" : "warn", ok ? "" : "offline \u00b7 clear stays local"));
       }
     });
 
