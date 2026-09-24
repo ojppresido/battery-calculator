@@ -517,8 +517,14 @@
       return "";
     }
 
+    function maskDeviceId(raw) {
+      const digits = String(raw).replace(/\D/g, "").slice(0, 7);
+      if (digits.length < 3) return digits;
+      return digits.slice(0, 3) + "-" + digits.slice(3);
+    }
+
     function saveDevice() {
-      const id = els.deviceId.value.trim().toUpperCase();
+      const id = maskDeviceId(els.deviceId.value).replace(/-$/, "");
       if (!id) return flash("Enter the Device ID.", true);
 
       const comp = {};
@@ -710,6 +716,10 @@
     } catch (e) {}
 
     els.form.addEventListener("submit", (e) => { e.preventDefault(); runAssessment(); });
+    els.deviceId.addEventListener("input", () => {
+      const masked = maskDeviceId(els.deviceId.value);
+      if (els.deviceId.value !== masked) els.deviceId.value = masked;
+    });
     els.addDevice.addEventListener("click", saveDevice);
     els.retestBtn.addEventListener("click", () => {
       const id = els.retestSelect.value.trim().toUpperCase();
