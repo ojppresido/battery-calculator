@@ -76,8 +76,8 @@
       <div id="batteryBanner" class="banner hidden"></div>
     </section>
 
-    <!-- Steps 2-4 (device entry / re-test / inventory) commented out — calculator-only everywhere. -->
-    <!--
+    <!-- Steps 2-4 (device entry / re-test / inventory) restored for shared mode; hidden on state links via .calc-only -->
+
     <section id="secDevice" class="card p-5 sm:p-7 mt-6 no-print step-beyond">
       <div class="flex items-center gap-3">
         <span class="step-chip">2</span>
@@ -233,7 +233,6 @@
         </div>
       </div>
     </section>
-
     -->
   </main>
 
@@ -323,7 +322,7 @@
     STATE_LOOKUP["ABUJA"] = "FCT ABUJA";
     const LOCKED_STATE = STATE_LOOKUP[normalizeState(new URLSearchParams(window.location.search).get("state"))] || null;
 
-    const CALC_ONLY = typeof window !== "undefined" && window.__CALC_ONLY === false ? false : true;
+    const CALC_ONLY = typeof window !== "undefined" && window.__CALC_ONLY === false ? false : (!!LOCKED_STATE && LOCKED_STATE !== "OGUN");
 
     function storageKey() {
       return LOCKED_STATE ? STORAGE_KEY_BASE + "_" + LOCKED_STATE.replace(/\s+/g, "_") : STORAGE_KEY_BASE;
@@ -999,7 +998,7 @@
     els.footerMeta.textContent = CALC_ONLY
       ? (LOCKED_STATE ? "Battery calculator \u00b7 " + LOCKED_STATE : "Battery calculator")
       : (LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet");
-    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 9 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
+    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 10 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
     if (CALC_ONLY) document.body.classList.add("calc-only");
 
     if (!CALC_ONLY) {
