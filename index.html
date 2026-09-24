@@ -98,6 +98,7 @@
             <option value="MTN">MTN</option>
             <option value="GLO">GLO</option>
             <option value="AIRTEL">AIRTEL</option>
+            <option value="9MOBILE">9MOBILE</option>
             <option value="NO SIM">NO SIM</option>
           </select>
         </label>
@@ -712,23 +713,24 @@
       const comp = {};
       COMPONENTS.forEach((c) => { comp[c.key] = isChecked(c.key); });
 
-      const existing = findDevice(id);
-      const d = existing || { deviceId: id, ts: Date.now() };
+      if (findDevice(id)) return flash(`Device ID <strong>${esc(id)}</strong> is already on the sheet — duplicate not saved.`, true);
+
+      const d = { deviceId: id, ts: Date.now() };
       d.comp = comp;
       d.simType = els.simType.value;
       d.state = els.fieldState.value;
       if (pending) {
         d.hours = pending.hours;
         d.batteryOk = pending.ok;
-        if (!existing && (!d.remarks || d.remarks === "Battery test pending")) d.remarks = autoRemarks(d);
-      } else if (!existing) {
+        if (!d.remarks || d.remarks === "Battery test pending") d.remarks = autoRemarks(d);
+      } else {
         d.hours = null;
         d.batteryOk = null;
       }
       d.status = statusOf(d);
       d.remarks = els.remarks.value.trim() || autoRemarks(d);
 
-      if (!existing) devices.push(d);
+      devices.push(d);
       if (pending) { pending = null; renderBanner(); }
 
       renderTable();
@@ -738,7 +740,7 @@
         setDbStatus(ok ? "ok" : "warn", ok ? "online \u00b7 " + DB.table.replace(/^bvas_devices_/, "") : "offline \u00b7 saved locally");
       }
       resetForm();
-      flash(`${d.deviceId} ${existing ? "updated" : "saved"} on the sheet${d.batteryOk === null ? " — battery test still pending." : "."}`, false);
+      flash(`${d.deviceId} saved on the sheet${d.batteryOk === null ? " — battery test still pending." : "."}`, false);
     }
 
     function resetForm() {
