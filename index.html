@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0f2354" />
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col">
+<body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col calc-only">
 
   <!-- Header -->
   <header class="bg-brand-800 text-white">
@@ -45,7 +45,7 @@
         <span class="step-chip">1</span>
         <div>
           <h2 class="section-title">Battery Endurance Test</h2>
-          <p class="step-sub">Enter AccuBattery usage data. The result attaches to the next device you save, or to a device selected for re-test.</p>
+          <p class="step-sub">Enter the AccuBattery usage data; the app estimates how long a fully-charged battery will last.</p>
         </div>
       </div>
 
@@ -77,7 +77,7 @@
     </section>
 
     <!-- Step 2 · Device Identification & Component Status -->
-    <section id="secDevice" class="card p-5 sm:p-7 mt-6 no-print">
+    <section id="secDevice" class="card p-5 sm:p-7 mt-6 no-print step-beyond">
       <div class="flex items-center gap-3">
         <span class="step-chip">2</span>
         <div>
@@ -131,7 +131,7 @@
     </section>
 
     <!-- Step 3 · Battery Re-test by Device ID -->
-    <section id="secRetest" class="card p-5 sm:p-7 mt-6 no-print">
+    <section id="secRetest" class="card p-5 sm:p-7 mt-6 no-print step-beyond">
       <div class="flex items-center gap-3">
         <span class="step-chip">3</span>
         <div>
@@ -152,7 +152,7 @@
     </section>
 
     <!-- Step 4 · Inventory Worksheet -->
-    <section id="secSheet" class="card p-5 sm:p-7 mt-6">
+    <section id="secSheet" class="card p-5 sm:p-7 mt-6 step-beyond">
       <div class="flex items-start gap-3">
         <span class="step-chip">4</span>
         <div class="flex-1">
@@ -285,6 +285,8 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+
+    const CALC_ONLY = typeof window !== "undefined" && window.__CALC_ONLY === false ? false : true;
 
     const RATED_CAPACITY = 8000;
     const USABLE_FACTOR = 0.92;
@@ -582,9 +584,11 @@
         return;
       }
       const tone = pending.ok ? "banner-ok" : "banner-warn";
-      const who = retestTarget
-        ? `Will attach to <strong>${esc(retestTarget)}</strong> automatically.`
-        : "Will attach to the next device you save.";
+      const who = CALC_ONLY
+        ? "Run the test again, or discard this result."
+        : (retestTarget
+          ? `Will attach to <strong>${esc(retestTarget)}</strong> automatically.`
+          : "Will attach to the next device you save.");
       b.className = `banner ${tone}`;
       b.innerHTML = `
         <span class="banner-icon">${pending.ok ? "\u2713" : "\u2717"}</span>
@@ -954,66 +958,77 @@
 
     /* ---------- wiring ---------- */
 
-    els.fieldState.innerHTML = STATES.map((s) =>
-      `<option value="${s}"${s === (LOCKED_STATE || "OGUN") ? " selected" : ""}>${s}</option>`).join("");
-
     if (LOCKED_STATE) {
-      els.fieldState.value = LOCKED_STATE;
-      els.fieldState.disabled = true;
       $("stateChip").textContent = "State: " + LOCKED_STATE;
       $("stateChip").classList.remove("hidden");
       $("stateChip").classList.add("inline-flex");
-      const note = $("stateLockNote");
-      note.textContent = "Locked \u2014 this worksheet is for " + LOCKED_STATE + " only.";
-      note.classList.remove("hidden");
     }
-    els.footerMeta.textContent = LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet";
+    els.footerMeta.textContent = CALC_ONLY
+      ? (LOCKED_STATE ? "Battery calculator \u00b7 " + LOCKED_STATE : "Battery calculator")
+      : (LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet");
 
-    buildChecklist();
-    renderTable();
+    if (!CALC_ONLY) {
+      els.fieldState.innerHTML = STATES.map((s) =>
+        `<option value="${s}"${s === (LOCKED_STATE || "OGUN") ? " selected" : ""}>${s}</option>`).join("");
+      if (LOCKED_STATE) {
+        els.fieldState.value = LOCKED_STATE;
+        els.fieldState.disabled = true;
+        const note = $("stateLockNote");
+        note.textContent = "Locked \u2014 this worksheet is for " + LOCKED_STATE + " only.";
+        note.classList.remove("hidden");
+      }
 
-    const today = new Date();
-    els.sheetDate.value = today.toISOString().slice(0, 10);
+      buildChecklist();
+      renderTable();
 
-    try {
-      const saved = localStorage.getItem(storageKey());
-      if (saved) restore(JSON.parse(saved));
-    } catch (e) {}
+      const today = new Date();
+      els.sheetDate.value = today.toISOString().slice(0, 10);
 
-    configureDb();
-    if (DB.enabled) loadFromDb();
+      try {
+        const saved = localStorage.getItem(storageKey());
+        if (saved) restore(JSON.parse(saved));
+      } catch (e) {}
+
+      configureDb();
+      if (DB.enabled) loadFromDb();
+    }
 
     els.form.addEventListener("submit", (e) => { e.preventDefault(); runAssessment(); });
     els.deviceId.addEventListener("input", () => {
       const masked = maskDeviceId(els.deviceId.value);
       if (els.deviceId.value !== masked) els.deviceId.value = masked;
     });
-    els.addDevice.addEventListener("click", saveDevice);
-    els.retestBtn.addEventListener("click", () => {
-      const id = els.retestSelect.value.trim().toUpperCase();
-      if (!id) return flash("Select a saved device first.", true);
-      startRetest(id);
-    });
-    els.printBtn.addEventListener("click", () => { persist(); window.print(); });
-    els.csvBtn.addEventListener("click", exportCsv);
-    els.saveBtn.addEventListener("click", () => { persist(); flash("Worksheet saved on this device.", false); });
-    els.loadBtn.addEventListener("click", () => {
-      try {
-        const saved = localStorage.getItem(storageKey());
-        if (!saved) return flash("No saved worksheet found on this device.", true);
-        restore(JSON.parse(saved));
-        flash("Worksheet loaded.", false);
-      } catch (e) { flash("Saved worksheet could not be read.", true); }
-    });
-    els.filterInput.addEventListener("input", renderTable);
-    els.clearBtn.addEventListener("click", () => {
-      if (!devices.length || confirm("Clear all captured devices from the inventory sheet?")) {
-        devices = [];
-        renderTable();
-        persist();
-        if (DB.enabled) dbClear().then((ok) => setDbStatus(ok ? "ok" : "warn", ok ? "" : "offline \u00b7 clear stays local"));
-      }
-    });
+
+    if (!CALC_ONLY) {
+      els.addDevice.addEventListener("click", saveDevice);
+      els.retestBtn.addEventListener("click", () => {
+        const id = els.retestSelect.value.trim().toUpperCase();
+        if (!id) return flash("Select a saved device first.", true);
+        startRetest(id);
+      });
+      els.printBtn.addEventListener("click", () => { persist(); window.print(); });
+      els.csvBtn.addEventListener("click", exportCsv);
+      els.saveBtn.addEventListener("click", () => { persist(); flash("Worksheet saved on this device.", false); });
+      els.loadBtn.addEventListener("click", () => {
+        try {
+          const saved = localStorage.getItem(storageKey());
+          if (!saved) return flash("No saved worksheet found on this device.", true);
+          restore(JSON.parse(saved));
+          flash("Worksheet loaded.", false);
+        } catch (e) { flash("Saved worksheet could not be read.", true); }
+      });
+      els.filterInput.addEventListener("input", renderTable);
+      els.clearBtn.addEventListener("click", () => {
+        if (!devices.length || confirm("Clear all captured devices from the inventory sheet?")) {
+          devices = [];
+          renderTable();
+          persist();
+          if (DB.enabled) dbClear().then((ok) => setDbStatus(ok ? "ok" : "warn", ok ? "" : "offline \u00b7 clear stays local"));
+        }
+      });
+      [els.sheetDate, els.signOfficer, els.signReviewer]
+        .forEach((i) => i.addEventListener("change", persist));
+    }
 
     [els.sheetDate, els.signOfficer, els.signReviewer]
       .forEach((i) => i.addEventListener("change", persist));

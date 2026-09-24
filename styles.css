@@ -300,6 +300,9 @@ select.field {
 }
 .step-sub { font-size: .8125rem; color: var(--gray-500); margin-top: .125rem; }
 
+/* ---------- calc-only mode (all worksheet/persistence UI hidden) ---------- */
+.calc-only #secDevice, .calc-only #secRetest, .calc-only #secSheet { display: none !important; }
+
 /* ---------- summary stat cards ---------- */
 .stat-card {
   background: #fff;
