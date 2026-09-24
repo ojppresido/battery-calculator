@@ -6,7 +6,6 @@
   <title>BVAS Device Health &amp; Inventory Worksheet | ICT Department</title>
   <meta name="theme-color" content="#0f2354" />
   <link rel="stylesheet" href="styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col">
 
@@ -225,7 +224,7 @@
   <footer class="bg-brand-900 text-brand-200 print:hidden">
     <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
       <span class="font-semibold text-white uppercase tracking-wider">ICT Department</span>
-      <span class="text-brand-300">BVAS Field Device Maintenance Tool</span>
+      <span class="text-brand-300">BVAS Field Device Maintenance Tool &middot; build 3 (REST&ndash;DB)</span>
       <span>Page 15</span>
     </div>
   </footer>
@@ -310,30 +309,36 @@
     }
 
     /* ---------- Supabase (per-state database) ----------
-       SUPABASE_URL / SUPABASE_ANON_KEY from:
+       Talks to Supabase's REST API (PostgREST) directly with fetch —
+       no external SDK/CDN required. Keys from:
        Dashboard -> Project Settings -> API -> Project URL / anon public key.
-       Leave empty to run fully offline (localStorage only).
-       When a ?state= URL is used AND the keys are set, the app syncs to
-       the table bvas_devices_<state> (e.g. bvas_devices_ogun). */
+       Only active on a ?state= URL; always syncs to bvas_devices_<state>. */
     const SUPABASE_URL = "https://fabdxxznbalfnsbttqqn.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhYmR4eHpuYmFsZm5zYnR0cXFuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAyNDQ0MTQsImV4cCI6MjEwNTgyMDQxNH0.NcQRrm9iUop2dutFfPpXwJ6KgTdkyIgj8CZdEdcbaCE";
 
-    const DB = { enabled: false, client: null, table: null };
+    const DB = { enabled: false, base: null, table: null };
 
     function stateTable(name) {
       return "bvas_devices_" + String(name).toLowerCase().replace(/\s+/g, "_");
     }
 
+    function dbHeaders(prefer) {
+      const h = {
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+        "Content-Type": "application/json"
+      };
+      if (prefer) h["Prefer"] = prefer;
+      return h;
+    }
+
     function configureDb() {
-      if (!LOCKED_STATE || !SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-      if (!window.supabase) return;
-      try {
-        DB.client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        DB.table = stateTable(LOCKED_STATE);
-        DB.enabled = true;
-      } catch (e) {
-        DB.enabled = false;
-      }
+      if (!LOCKED_STATE) return;
+      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) { setDbStatus("warn", "db not configured"); return; }
+      if (typeof fetch !== "function") { setDbStatus("warn", "no network \u00b7 local only"); return; }
+      DB.base = SUPABASE_URL + "/rest/v1";
+      DB.table = stateTable(LOCKED_STATE);
+      DB.enabled = true;
     }
 
     function deviceToRow(d) {
@@ -372,8 +377,12 @@
     async function dbUpsert(d) {
       if (!DB.enabled) return true;
       try {
-        const { error } = await DB.client.from(DB.table).upsert(deviceToRow(d), { onConflict: "device_id" });
-        if (error) throw error;
+        const res = await fetch(DB.base + "/" + DB.table + "?on_conflict=device_id", {
+          method: "POST",
+          headers: dbHeaders("resolution=merge-duplicates,return=representation"),
+          body: JSON.stringify([deviceToRow(d)])
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
         return true;
       } catch (e) { return false; }
     }
@@ -381,25 +390,38 @@
     async function dbDelete(id) {
       if (!DB.enabled) return true;
       try {
-        const { error } = await DB.client.from(DB.table).delete().eq("device_id", id);
-        if (error) throw error;
+        const res = await fetch(DB.base + "/" + DB.table + "?device_id=eq." + encodeURIComponent(id), {
+          method: "DELETE",
+          headers: dbHeaders()
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
         return true;
       } catch (e) { return false; }
     }
 
     async function dbFetch() {
       if (!DB.enabled) return null;
-      const { data, error } = await DB.client.from(DB.table)
-        .select("*").order("ts", { ascending: true });
-      if (error) throw error;
+      const res = await fetch(DB.base + "/" + DB.table + "?select=*&order=ts.asc", { headers: dbHeaders() });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
       return (Array.isArray(data) ? data : []).map(rowToDevice);
     }
 
     async function dbClear() {
       if (!DB.enabled) return true;
       try {
-        const { error } = await DB.client.from(DB.table).delete().neq("device_id", "");
-        if (error) throw error;
+        const res = await fetch(DB.base + "/" + DB.table + "?select=id", { headers: dbHeaders() });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const rows = await res.json();
+        const ids = (Array.isArray(rows) ? rows : []).map((r) => r.id);
+        for (let i = 0; i < ids.length; i += 20) {
+          const part = ids.slice(i, i + 20);
+          const r = await fetch(DB.base + "/" + DB.table + "?id=in.(" + part.join(",") + ")", {
+            method: "DELETE",
+            headers: dbHeaders()
+          });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+        }
         return true;
       } catch (e) { return false; }
     }
