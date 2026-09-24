@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0f2354" />
   <link rel="stylesheet" href="styles.css?v=4" />
 </head>
-<body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col calc-only">
+<body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col">
 
   <!-- Header -->
   <header class="bg-brand-800 text-white">
@@ -76,11 +76,7 @@
       <div id="batteryBanner" class="banner hidden"></div>
     </section>
 
-    <!-- =========================================================
-         DISABLED — calculator-only mode (steps 2–4 commented out).
-         Uncomment this block to restore device entry, re-test and inventory.
-         ========================================================= -->
-    <!--
+    <!-- Steps 2-4 (device entry / re-test / inventory) restored for shared mode; hidden on state links via .calc-only -->
     <section id="secDevice" class="card p-5 sm:p-7 mt-6 no-print step-beyond">
       <div class="flex items-center gap-3">
         <span class="step-chip">2</span>
@@ -233,14 +229,14 @@
         </div>
       </div>
     </section>
-    -->
+
   </main>
 
   <!-- Footer -->
   <footer class="bg-brand-900 text-brand-200 print:hidden">
     <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
       <span class="font-semibold text-white uppercase tracking-wider">ICT Department</span>
-      <span class="text-brand-300">BVAS Field Device Maintenance Tool &middot; build 4 (calculator only)</span>
+      <span class="text-brand-300" id="buildTag">BVAS Field Device Maintenance Tool</span>
       <span id="footerMeta" class="uppercase tracking-wider">Shared worksheet</span>
     </div>
   </footer>
@@ -287,8 +283,6 @@
   <script>
     const $ = (id) => document.getElementById(id);
 
-    const CALC_ONLY = typeof window !== "undefined" && window.__CALC_ONLY === false ? false : true;
-
     const RATED_CAPACITY = 8000;
     const USABLE_FACTOR = 0.92;
     const MIN_THRESHOLD_HOURS = 7;
@@ -323,6 +317,8 @@
     STATE_LOOKUP["FCT"] = "FCT ABUJA";
     STATE_LOOKUP["ABUJA"] = "FCT ABUJA";
     const LOCKED_STATE = STATE_LOOKUP[normalizeState(new URLSearchParams(window.location.search).get("state"))] || null;
+
+    const CALC_ONLY = typeof window !== "undefined" && window.__CALC_ONLY === false ? false : !!LOCKED_STATE;
 
     function storageKey() {
       return LOCKED_STATE ? STORAGE_KEY_BASE + "_" + LOCKED_STATE.replace(/\s+/g, "_") : STORAGE_KEY_BASE;
@@ -970,6 +966,8 @@
     els.footerMeta.textContent = CALC_ONLY
       ? (LOCKED_STATE ? "Battery calculator \u00b7 " + LOCKED_STATE : "Battery calculator")
       : (LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet");
+    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 5 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
+    if (CALC_ONLY) document.body.classList.add("calc-only");
 
     if (!CALC_ONLY) {
       els.fieldState.innerHTML = STATES.map((s) =>
