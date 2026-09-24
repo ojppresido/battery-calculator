@@ -168,6 +168,9 @@
         <button type="button" id="saveBtn" class="btn-tool">Save</button>
         <button type="button" id="loadBtn" class="btn-tool">Load</button>
         <button type="button" id="clearBtn" class="btn-tool btn-tool-danger">Clear All</button>
+        <button type="button" id="backupBtn" class="btn-tool" title="Download a JSON backup of this worksheet">Backup</button>
+        <button type="button" id="restoreBtn" class="btn-tool" title="Restore a JSON backup">Restore Backup</button>
+        <input id="restoreFile" type="file" accept="application/json,.json" class="hidden" />
       </div>
 
       <div class="mt-5 print:hidden">
@@ -465,6 +468,9 @@
       saveBtn: $("saveBtn"),
       loadBtn: $("loadBtn"),
       clearBtn: $("clearBtn"),
+      backupBtn: $("backupBtn"),
+      restoreBtn: $("restoreBtn"),
+      restoreFile: $("restoreFile"),
       stats: $("stats"),
       filterInput: $("filterInput"),
       statusPill: $("statusPill"),
@@ -956,6 +962,31 @@
       download("bvas-inventory.csv", head.map(q).join(",") + "\n" + lines.join("\n"), "text/csv;charset=utf-8");
     }
 
+    function exportBackup() {
+      if (!devices.length) return flash("Nothing to back up yet.", true);
+      const name = "bvas-backup-" + (LOCKED_STATE || "shared").toLowerCase().replace(/\s+/g, "-") + "-" + new Date().toISOString().slice(0, 10) + ".json";
+      download(name, JSON.stringify(snapshot(), null, 2), "application/json");
+    }
+
+    function restoreBackupFile() {
+      const f = els.restoreFile.files && els.restoreFile.files[0];
+      if (!f) return;
+      const read = new FileReader();
+      read.onload = () => {
+        try {
+          const data = JSON.parse(read.result);
+          if (!Array.isArray(data.devices)) throw new Error("not a worksheet backup");
+          restore(data);
+          persist();
+          flash("Backup restored \u2014 " + devices.length + " device" + (devices.length === 1 ? "" : "s") + ".", false);
+        } catch (e) {
+          flash("Invalid backup file.", true);
+        }
+      };
+      read.readAsText(f);
+      els.restoreFile.value = "";
+    }
+
     /* ---------- wiring ---------- */
 
     if (LOCKED_STATE) {
@@ -1020,6 +1051,9 @@
         } catch (e) { flash("Saved worksheet could not be read.", true); }
       });
       els.filterInput.addEventListener("input", renderTable);
+      els.backupBtn.addEventListener("click", exportBackup);
+      els.restoreBtn.addEventListener("click", () => els.restoreFile.click());
+      els.restoreFile.addEventListener("change", restoreBackupFile);
       els.clearBtn.addEventListener("click", () => {
         if (!devices.length || confirm("Clear all captured devices from the inventory sheet?")) {
           devices = [];
