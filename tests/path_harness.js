@@ -9,6 +9,10 @@ const pageScript = m[1];
 
 // Sections exist in the DOM on every page; calc-only hides them via the .calc-only CSS class.
 const REMOVED_IDS = new Set();
+const CALC_ONLY_MISSING_IDS = [
+  "comp_screen", "comp_camera", "comp_fingerprint", "comp_sim",
+  "comp_charging", "comp_wifi", "comp_gps"
+];
 
 const elCache = new Map();
 function makeEl(id) {
@@ -59,7 +63,9 @@ function freshSandbox(search, pathname) {
 }
 
 function caseCalcOnly(name, search, pathname) {
+  CALC_ONLY_MISSING_IDS.forEach((id) => REMOVED_IDS.add(id));
   const ctx = freshSandbox(search, pathname);
+  CALC_ONLY_MISSING_IDS.forEach((id) => REMOVED_IDS.delete(id));
   if (ctx.__initError) { console.log("FAIL init " + name + ": " + ctx.__initError.stack); return; }
   const r = vm.runInContext(`
     var ok = true;

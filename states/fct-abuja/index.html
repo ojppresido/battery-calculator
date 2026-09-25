@@ -233,7 +233,6 @@
         </div>
       </div>
     </section>
-    -->
   </main>
 
   <!-- Footer -->
@@ -572,6 +571,7 @@
     }
 
     function renderFinalStatus() {
+      if (CALC_ONLY) return;
       const fs = els.finalStatus;
       if (!fs) return;
       const hw = hardwareAllTicked();
