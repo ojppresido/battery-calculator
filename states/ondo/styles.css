@@ -659,7 +659,6 @@ footer > div { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
   html, body { background: #fff !important; }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   header .h-1, footer, .print\:hidden, .no-print, header .h-12 { display: none !important; }
-  #stateChip, #statusPill, #countPill { display: none !important; }
   header > div:first-child { padding-top: 0 !important; padding-bottom: 0 !important; }
   main { max-width: none !important; padding: 0 !important; }
   .card { border: 0 !important; box-shadow: none !important; padding: 0 !important; }

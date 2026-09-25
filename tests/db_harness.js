@@ -7,6 +7,13 @@ const m = html.match(/<script>([\s\S]*?)<\/script>/);
 if (!m) throw new Error("no script");
 const pageScript = m[1];
 
+let markupFail = false;
+for (const id of ["stateChip", "statusPill", "statusDot", "statusText", "countPill"]) {
+  const gone = !html.includes(`id="${id}"`);
+  console.log((gone ? "PASS" : "FAIL") + `: header chip #${id} removed from markup`);
+  if (!gone) markupFail = true;
+}
+
 const elCache = new Map();
 function makeEl(id) {
   if (elCache.has(id)) return elCache.get(id);
@@ -79,8 +86,6 @@ const driver = `
     t("loaded 2 devices from db", devices.length === 2, "got " + devices.length);
     t("device row mapped (bad battery score kept)", devices[1].deviceId === "OG-0423" && devices[1].batteryOk === false && devices[1].hours === 3.68);
     t("status normalized", devices[1].status === "BATTERY REPLACEMENT REQUIRED");
-    t("status pill shows Online", els.statusPill && els.statusText.textContent.indexOf("Online") !== -1, els.statusText && els.statusText.textContent);
-    t("status dot is green", els.statusDot && els.statusDot.className.indexOf("green") !== -1, els.statusDot && els.statusDot.className);
     t("database requests carry private session header", calls.every(function (c) { return c.headers && c.headers["X-BVAS-Session"] === SESSION_ID; }));
     t("row actions expose edit", els.inventoryBody.innerHTML.indexOf('data-act="edit"') !== -1);
     editingRowId = devices[0].rowId;

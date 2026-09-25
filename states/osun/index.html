@@ -23,14 +23,6 @@
       <div class="min-w-0 flex-1">
         <h1 class="fluid-title font-bold leading-tight">BVAS Device Health &amp; Inventory Worksheet</h1>
         <p class="text-brand-100 text-xs sm:text-sm mt-0.5 tracking-wide uppercase">ICT Department</p>
-        <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-          <span id="stateChip" class="hidden items-center gap-1 rounded-full bg-white/10 ring-1 ring-white/20 px-3 py-1 text-xs font-bold uppercase tracking-wider"></span>
-          <span id="statusPill" class="hidden items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider">
-            <span id="statusDot" class="h-2 w-2 rounded-full"></span>
-            <span id="statusText"></span>
-          </span>
-          <span id="countPill" class="hidden items-center rounded-full bg-white/10 ring-1 ring-white/20 px-3 py-1 text-xs font-bold uppercase tracking-wider"></span>
-        </div>
       </div>
     </div>
     <div class="h-1 bg-gradient-to-r from-green-400 via-brand-500 to-green-400"></div>
@@ -524,10 +516,6 @@
       restoreFile: $("restoreFile"),
       stats: $("stats"),
       filterInput: $("filterInput"),
-      statusPill: $("statusPill"),
-      statusDot: $("statusDot"),
-      statusText: $("statusText"),
-      countPill: $("countPill"),
       footerMeta: $("footerMeta"),
       signOfficer: $("signOfficer"),
       signReviewer: $("signReviewer"),
@@ -987,8 +975,6 @@
     function renderTable() {
       devices.forEach(normalizeDevice);
       renderStats();
-      els.countPill.classList.remove("hidden");
-      els.countPill.textContent = devices.length + " device" + (devices.length === 1 ? "" : "s");
 
       const term = (els.filterInput.value || "").trim().toUpperCase();
       const shown = term ? devices.filter((d) => d.deviceId.toUpperCase().includes(term)) : devices;
@@ -1102,21 +1088,8 @@
     /* ---------- Supabase sync helpers ---------- */
 
     function setDbStatus(mode, msg) {
-      const pill = els.statusPill, dot = els.statusDot, text = els.statusText;
-      if (!pill || !LOCKED_STATE) return;
-      pill.classList.remove("hidden");
-      if (mode === "off") { pill.classList.add("hidden"); return; }
-      if (mode === "ok") {
-        pill.className = "items-center gap-1.5 rounded-full ring-1 px-3 py-1 text-xs font-bold uppercase tracking-wider inline-flex bg-green-100 text-green-800 ring-green-300";
-        dot.className = "h-2 w-2 rounded-full bg-green-500";
-        text.textContent = "Online \u00b7 " + LOCKED_STATE;
-        pill.title = "Last sync: " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      } else {
-        pill.className = "items-center gap-1.5 rounded-full ring-1 px-3 py-1 text-xs font-bold uppercase tracking-wider inline-flex bg-orange-100 text-orange-800 ring-orange-300";
-        dot.className = "h-2 w-2 rounded-full bg-orange-500";
-        text.textContent = msg || "Offline";
-        pill.title = "";
-      }
+      if (mode === "off" || !LOCKED_STATE) return;
+      console.info("[bvas] db status:", mode, msg || "");
     }
 
     async function loadFromDb() {
@@ -1193,11 +1166,6 @@
 
     /* ---------- wiring ---------- */
 
-    if (LOCKED_STATE) {
-      $("stateChip").textContent = "State: " + LOCKED_STATE;
-      $("stateChip").classList.remove("hidden");
-      $("stateChip").classList.add("inline-flex");
-    }
     els.footerMeta.textContent = CALC_ONLY
       ? (LOCKED_STATE ? "Battery calculator \u00b7 " + LOCKED_STATE : "Battery calculator")
       : (LOCKED_STATE ? "Private session \u00b7 " + LOCKED_STATE : "Private session");
