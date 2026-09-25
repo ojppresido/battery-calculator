@@ -36,8 +36,15 @@ last path segment, so `…/states/ogun/` and `…/ogun/` both work.
 
 ## Worksheet editing
 
+Device IDs must be exactly three digits, a hyphen, then three digits (e.g. `101-701`). Six plain digits
+are auto-formatted while typing; anything else (`345`, `101-70`, `101-7010`) is rejected on save.
+SIM Type is required and starts on the `Select SIM type` placeholder; use `NO SIM` when a device has no
+SIM. Saving a device clears the Device ID, SIM Type, remarks, component ticks, and the battery endurance
+inputs (consumed mAh and minutes) so the next entry starts clean.
+
 Each saved inventory row has an `Edit` action. Edit the Device ID, battery result and hours, component
-checkboxes, SIM type, or remarks, then use `Save`; `Cancel` leaves the row unchanged. Battery re-test and
+checkboxes, SIM type, or remarks, then use `Save`; `Cancel` leaves the row unchanged. The same Device ID
+format and required SIM Type apply to inline edits. Battery re-test and
 remove actions remain available. `Clear All` clears only the current browser session's local worksheet and
 does not delete Supabase rows.
 

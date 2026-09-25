@@ -89,7 +89,8 @@ const driver = `
     editingRowId = null;
     renderTable();
 
-    document.getElementById("deviceId").value = "7011";
+    document.getElementById("deviceId").value = "701100";
+    document.getElementById("simType").value = "MTN";
     COMPONENTS.forEach(function (c) { compInput(c.key).checked = true; });
     document.getElementById("consumed").value = "1000";
     document.getElementById("minutes").value = "30";
@@ -100,27 +101,40 @@ const driver = `
     t("saveDevice upserted to db", up.length === 1);
     t("upsert hits bvas_devices_ogun", up[0].url.indexOf("/bvas_devices_ogun?") !== -1, up[0].url);
     var row = JSON.parse(up[0].body)[0];
-    t("upsert maps deviceId", row.device_id === "701-1");
+    t("upsert maps deviceId", row.device_id === "701-100", row.device_id);
     t("upsert carries stable row id", typeof row.row_id === "string" && row.row_id.length > 0);
     t("upsert keeps battery score", row.battery_ok === false && row.battery_hours < 7, JSON.stringify(row));
+    t("upsert sends selected sim type", row.sim_type === "MTN", row.sim_type);
+    t("battery inputs cleared after save", document.getElementById("consumed").value === "" && document.getElementById("minutes").value === "", document.getElementById("consumed").value + "/" + document.getElementById("minutes").value);
+    t("simType reset after save", document.getElementById("simType").value === "", document.getElementById("simType").value);
 
     var edited = devices[0];
-    var editRow = {
-      querySelector: function (selector) {
-        var fields = {
-          '[data-edit-field="deviceId"]': { value: "0424" },
-          '[data-edit-field="simType"]': { value: "GLO" },
-          '[data-edit-field="batteryOk"]': { value: "true" },
-          '[data-edit-field="hours"]': { value: "8.5" },
-          '[data-edit-field="remarks"]': { value: "Corrected during review" }
-        };
-        if (fields[selector]) return fields[selector];
-        var comp = selector.match(/data-edit-comp="([^"]+)"/);
-        return comp ? { checked: true } : null;
-      }
-    };
-    await saveEditedRow(edited, editRow);
-    t("edited row updates device id", edited.deviceId === "042-4", edited.deviceId);
+    function editRowStub(idValue, simValue) {
+      return {
+        querySelector: function (selector) {
+          var fields = {
+            '[data-edit-field="deviceId"]': { value: idValue },
+            '[data-edit-field="simType"]': { value: simValue },
+            '[data-edit-field="batteryOk"]': { value: "true" },
+            '[data-edit-field="hours"]': { value: "8.5" },
+            '[data-edit-field="remarks"]': { value: "Corrected during review" }
+          };
+          if (fields[selector]) return fields[selector];
+          var comp = selector.match(/data-edit-comp="([^"]+)"/);
+          return comp ? { checked: true } : null;
+        }
+      };
+    }
+
+    var originalId = edited.deviceId;
+    await saveEditedRow(edited, editRowStub("0424", "GLO"));
+    t("edited row rejects invalid device id", edited.deviceId === originalId, edited.deviceId);
+    await saveEditedRow(edited, editRowStub("042400", ""));
+    t("edited row rejects missing sim type", edited.deviceId === originalId && edited.simType === "MTN", edited.deviceId + "/" + edited.simType);
+
+    await saveEditedRow(edited, editRowStub("042400", "GLO"));
+    t("edited row updates device id", edited.deviceId === "042-400", edited.deviceId);
+    t("edited row updates sim type", edited.simType === "GLO", edited.simType);
     t("edited row updates status and battery", edited.batteryOk === true && edited.hours === 8.5 && edited.status === "FUNCTIONAL", edited.status);
 
     var deleteCallsBeforeClear = calls.filter(function (c) { return c.method === "DELETE"; }).length;

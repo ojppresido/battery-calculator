@@ -116,10 +116,48 @@ const driver = `
 
   COMPONENTS.forEach(function (c) { compInput(c.key).checked = true; });
 
+  document.getElementById("simType").value = "MTN";
   document.getElementById("deviceId").value = "101701";
   saveDevice();
   t("device saved", devices.length === 1);
   t("battery pending before test", devices[0].batteryOk === null);
+  t("simType saved", devices[0].simType === "MTN", devices[0].simType);
+
+  /* Device ID must be strict: exactly NNN-NNN */
+  var beforeStrict = devices.length;
+  document.getElementById("deviceId").value = "345";
+  document.getElementById("simType").value = "MTN";
+  saveDevice();
+  t("short device id rejected", devices.length === beforeStrict, "before=" + beforeStrict + " after=" + devices.length);
+  t("short device id error shown", els.formMsg.className.indexOf("text-red-700") !== -1, els.formMsg.className);
+  document.getElementById("deviceId").value = "1017010";
+  saveDevice();
+  t("too-long device id rejected", devices.length === beforeStrict, "before=" + beforeStrict + " after=" + devices.length);
+  document.getElementById("deviceId").value = "abc101701xyz";
+  saveDevice();
+  t("device id with letters rejected", devices.length === beforeStrict, "before=" + beforeStrict + " after=" + devices.length);
+  document.getElementById("deviceId").value = "101-70";
+  saveDevice();
+  t("incomplete device id rejected", devices.length === beforeStrict, "before=" + beforeStrict + " after=" + devices.length);
+
+  /* SIM Type is required */
+  document.getElementById("deviceId").value = "303303";
+  document.getElementById("simType").value = "";
+  saveDevice();
+  t("missing sim type rejected", devices.length === beforeStrict, "before=" + beforeStrict + " after=" + devices.length);
+  t("missing sim type error shown", els.formMsg.className.indexOf("text-red-700") !== -1, els.formMsg.className);
+
+  /* battery endurance inputs must clear after a successful save */
+  document.getElementById("consumed").value = "500";
+  document.getElementById("minutes").value = "45";
+  document.getElementById("simType").value = "GLO";
+  document.getElementById("deviceId").value = "404404";
+  saveDevice();
+  t("second device saved", devices.length === beforeStrict + 1);
+  t("consumed cleared after save", document.getElementById("consumed").value === "", JSON.stringify(document.getElementById("consumed").value));
+  t("minutes cleared after save", document.getElementById("minutes").value === "", JSON.stringify(document.getElementById("minutes").value));
+  t("simType reset to placeholder after save", document.getElementById("simType").value === "", JSON.stringify(document.getElementById("simType").value));
+  t("deviceId cleared after save", document.getElementById("deviceId").value === "", JSON.stringify(document.getElementById("deviceId").value));
 
   /* bad-battery retest: attach must happen IMMEDIATELY at runAssessment */
   startRetest("101-701");
@@ -154,6 +192,7 @@ const driver = `
   COMPONENTS.forEach(function (c) { compInput(c.key).checked = true; });
   compInput("sim").checked = false;
   document.getElementById("deviceId").value = "202202";
+  document.getElementById("simType").value = "GLO";
   document.getElementById("consumed").value = "100";
   document.getElementById("minutes").value = "60";
   runAssessment();
@@ -164,6 +203,7 @@ const driver = `
 
   compInput("screen").checked = false;
   document.getElementById("deviceId").value = "303303";
+  document.getElementById("simType").value = "MTN";
   saveDevice();
   var d3 = devices.find(function (d) { return d.deviceId === "303-303"; });
   t("screen unticked -> NON-FUNCTIONAL (gate still works)", !!d3 && d3.status === "NON-FUNCTIONAL", d3 && d3.status);
@@ -171,6 +211,7 @@ const driver = `
   /* duplicate device ID must be rejected, not saved */
   var before = devices.length;
   document.getElementById("deviceId").value = "101701";
+  document.getElementById("simType").value = "MTN";
   document.getElementById("consumed").value = "100";
   document.getElementById("minutes").value = "60";
   runAssessment();

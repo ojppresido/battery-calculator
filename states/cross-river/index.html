@@ -90,12 +90,14 @@
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
         <label class="block">
           <span class="block text-sm font-medium text-gray-700 mb-1">Device ID</span>
-          <input id="deviceId" type="text" autocomplete="off" required placeholder="101-701"
+          <input id="deviceId" type="text" autocomplete="off" inputmode="numeric" maxlength="7"
+                 pattern="[0-9]{3}-[0-9]{3}" required placeholder="101-701"
                  class="field uppercase" />
         </label>
         <label class="block">
           <span class="block text-sm font-medium text-gray-700 mb-1">SIM Type</span>
-          <select id="simType" class="field">
+          <select id="simType" class="field" required>
+            <option value="" selected>Select SIM type</option>
             <option value="MTN">MTN</option>
             <option value="GLO">GLO</option>
             <option value="AIRTEL">AIRTEL</option>
@@ -292,6 +294,8 @@
     const MIN_THRESHOLD_HOURS = 7;
     const STORAGE_KEY_BASE = "bvas_inventory_v3";
     const SESSION_STORAGE_KEY = "bvas_session_v1";
+    const DEVICE_ID_PATTERN = /^\d{3}-\d{3}$/;
+    const DEVICE_ID_HINT = "Enter the Device ID in the format 101-701 (three digits, a hyphen, three digits).";
     const SIM_TYPES = ["MTN", "GLO", "AIRTEL", "9MOBILE", "NO SIM"];
 
     let memorySessionId = null;
@@ -780,15 +784,38 @@
       return "";
     }
 
+    function isValidDeviceId(value) {
+      return DEVICE_ID_PATTERN.test(String(value || ""));
+    }
+
     function maskDeviceId(raw) {
       const digits = String(raw).replace(/\D/g, "").slice(0, 7);
       if (digits.length < 3) return digits;
       return digits.slice(0, 3) + "-" + digits.slice(3);
     }
 
+    function requireValidDeviceId(raw) {
+      const text = String(raw == null ? "" : raw).trim();
+      if (!text) return { error: "Enter the Device ID." };
+      if (!/^[0-9-]+$/.test(text)) return { error: DEVICE_ID_HINT };
+      const id = maskDeviceId(text).replace(/-$/, "");
+      if (!isValidDeviceId(id)) return { error: DEVICE_ID_HINT };
+      return { id };
+    }
+
+    function requireSimType(value) {
+      const type = String(value || "");
+      if (!SIM_TYPES.includes(type)) return { error: "Select a SIM type." };
+      return { type };
+    }
+
     async function saveDevice() {
-      const id = maskDeviceId(els.deviceId.value).replace(/-$/, "");
-      if (!id) return flash("Enter the Device ID.", true);
+      const idCheck = requireValidDeviceId(els.deviceId.value);
+      if (idCheck.error) return flash(idCheck.error, true);
+      const id = idCheck.id;
+
+      const simCheck = requireSimType(els.simType.value);
+      if (simCheck.error) return flash(simCheck.error, true);
 
       const comp = {};
       COMPONENTS.forEach((c) => { comp[c.key] = isChecked(c.key); });
@@ -797,7 +824,7 @@
 
       const d = { rowId: makeUuid(), remoteId: null, deviceId: id, ts: Date.now() };
       d.comp = comp;
-      d.simType = els.simType.value;
+      d.simType = simCheck.type;
       d.state = els.fieldState.value;
       if (pending) {
         d.hours = pending.hours;
@@ -825,7 +852,10 @@
 
     function resetForm() {
       els.deviceId.value = "";
+      els.simType.value = "";
       els.remarks.value = "";
+      els.consumed.value = "";
+      els.minutes.value = "";
       COMPONENTS.forEach((c) => { compInput(c.key).checked = false; });
       setBattery(null);
       renderFinalStatus();
@@ -865,8 +895,8 @@
     }
 
     function editableSimCell(d) {
-      return `<select class="table-edit-select" data-edit-field="simType" aria-label="SIM type">
-        <option value=""${!d.simType ? " selected" : ""}>—</option>
+      return `<select class="table-edit-select" data-edit-field="simType" aria-label="SIM type" required>
+        <option value=""${!d.simType ? " selected" : ""}>Select SIM type</option>
         ${SIM_TYPES.map((type) => `<option value="${esc(type)}"${type === d.simType ? " selected" : ""}>${esc(type)}</option>`).join("")}
       </select>`;
     }
@@ -896,8 +926,13 @@
         return flash("Complete every editable field before saving.", true);
       }
 
-      const nextId = maskDeviceId(idInput.value).replace(/-$/, "");
-      if (!nextId) return flash("Enter a Device ID.", true);
+      const idCheck = requireValidDeviceId(idInput.value);
+      if (idCheck.error) return flash(idCheck.error, true);
+      const nextId = idCheck.id;
+
+      const simCheck = requireSimType(simInput.value);
+      if (simCheck.error) return flash(simCheck.error, true);
+
       if (devices.some((other) => other.rowId !== d.rowId && other.deviceId === nextId)) {
         return flash(`Device ID <strong>${esc(nextId)}</strong> is already on the sheet.`, true);
       }
@@ -917,7 +952,7 @@
       const remarksWasAutomatic = !oldRemarks || oldRemarks === oldAutoRemarks || oldRemarks === "Battery test pending";
       const remarksValue = remarksInput.value.trim();
       d.deviceId = nextId;
-      d.simType = simInput.value;
+      d.simType = simCheck.type;
       d.batteryOk = nextBattery;
       d.hours = hours;
       COMPONENTS.forEach((c) => {
@@ -971,7 +1006,7 @@
           <tr${editing ? ' class="is-editing"' : ""}>
           <td class="c col-sn">${i + 1}</td>
           <td class="id sticky-col sticky-col-2">${editing
-            ? `<input class="table-edit-input" data-edit-field="deviceId" value="${esc(d.deviceId)}" aria-label="Device ID" />`
+            ? `<input class="table-edit-input" data-edit-field="deviceId" value="${esc(d.deviceId)}" inputmode="numeric" maxlength="7" pattern="[0-9]{3}-[0-9]{3}" aria-label="Device ID" />`
             : esc(d.deviceId)}</td>
           <td class="c col-batt ${d.batteryOk === false ? "bad" : d.batteryOk === true ? "ok" : ""}">${editing ? editableBatteryCell(d) : batteryCell(d)}</td>
           ${COMPONENTS.map((c) => `<td class="c ${d.comp[c.key] ? "ok" : "bad"}">${editing ? editableComponentCell(d, c) : mark(d.comp[c.key])}</td>`).join("")}
@@ -1201,6 +1236,12 @@
       els.deviceId.addEventListener("input", () => {
         const masked = maskDeviceId(els.deviceId.value);
         if (els.deviceId.value !== masked) els.deviceId.value = masked;
+      });
+      els.inventoryBody.addEventListener("input", (e) => {
+        const input = e.target && e.target.closest ? e.target.closest('[data-edit-field="deviceId"]') : null;
+        if (!input) return;
+        const masked = maskDeviceId(input.value);
+        if (input.value !== masked) input.value = masked;
       });
       els.addDevice.addEventListener("click", saveDevice);
       els.retestBtn.addEventListener("click", () => {
