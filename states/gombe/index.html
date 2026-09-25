@@ -436,25 +436,6 @@
       return (Array.isArray(data) ? data : []).map(rowToDevice);
     }
 
-    async function dbClear() {
-      if (!DB.enabled) return true;
-      try {
-        const res = await fetch(DB.base + "/" + DB.table + "?select=id", { headers: dbHeaders() });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const rows = await res.json();
-        const ids = (Array.isArray(rows) ? rows : []).map((r) => r.id);
-        for (let i = 0; i < ids.length; i += 20) {
-          const part = ids.slice(i, i + 20);
-          const r = await fetch(DB.base + "/" + DB.table + "?id=in.(" + part.join(",") + ")", {
-            method: "DELETE",
-            headers: dbHeaders()
-          });
-          if (!r.ok) throw new Error("HTTP " + r.status);
-        }
-        return true;
-      } catch (e) { return false; }
-    }
-
     const els = {
       form: $("calcForm"),
       consumed: $("consumed"),
@@ -1066,11 +1047,10 @@
       els.restoreBtn.addEventListener("click", () => els.restoreFile.click());
       els.restoreFile.addEventListener("change", restoreBackupFile);
       els.clearBtn.addEventListener("click", () => {
-        if (!devices.length || confirm("Clear all captured devices from the inventory sheet?")) {
+        if (!devices.length || confirm("Clear all captured devices from this browser? Supabase data will not be affected.")) {
           devices = [];
           renderTable();
           persist();
-          if (DB.enabled) dbClear().then((ok) => setDbStatus(ok ? "ok" : "warn", ok ? "" : "offline \u00b7 clear stays local"));
         }
       });
       [els.sheetDate, els.signOfficer, els.signReviewer]

@@ -90,6 +90,11 @@ const driver = `
     var row = JSON.parse(up[0].body)[0];
     t("upsert maps deviceId", row.device_id === "701-1");
     t("upsert keeps battery score", row.battery_ok === false && row.battery_hours < 7, JSON.stringify(row));
+
+    var deleteCallsBeforeClear = calls.filter(function (c) { return c.method === "DELETE"; }).length;
+    document.getElementById("clearBtn").click();
+    t("clear all is local-only", devices.length === 0 && calls.filter(function (c) { return c.method === "DELETE"; }).length === deleteCallsBeforeClear);
+    t("clear all removes local snapshot", JSON.parse(localStorage.getItem(storageKey())).devices.length === 0);
   })().then(function () {
     console.log(__fail ? "RESULT: FAILURES" : "RESULT: ALL PASS");
   }).catch(function (e) { console.log("DRIVER ERROR:", e.stack); });
