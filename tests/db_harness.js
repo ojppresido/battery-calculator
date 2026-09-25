@@ -36,25 +36,29 @@ const document = { getElementById: makeEl, createElement: () => makeEl("_x"), bo
 
 const store = {};
 const localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
+const sessionStore = {};
+const sessionStorage = { getItem: (k) => (k in sessionStore ? sessionStore[k] : null), setItem: (k, v) => { sessionStore[k] = String(v); }, removeItem: (k) => { delete sessionStore[k]; } };
 
 const calls = [];
 const fakeRows = [
-  { id: 1, device_id: "OG-0421", ts: 1, sim_type: "MTN", state: "OGUN", screen: true, camera: true, fingerprint: true, sim: true, charging: true, wifi: true, gps: true, battery_ok: true, battery_hours: 9.86, status: "FUNCTIONAL", remarks: "" },
-  { id: 2, device_id: "OG-0423", ts: 2, sim_type: "GLO", state: "OGUN", screen: true, camera: true, fingerprint: true, sim: true, charging: true, wifi: true, gps: true, battery_ok: false, battery_hours: 3.68, status: "BATTERY REPLACEMENT REQUIRED", remarks: "Battery replacement required" }
+  { id: 1, row_id: "00000000-0000-4000-8000-000000000001", device_id: "OG-0421", ts: 1, sim_type: "MTN", state: "OGUN", screen: true, camera: true, fingerprint: true, sim: true, charging: true, wifi: true, gps: true, battery_ok: true, battery_hours: 9.86, status: "FUNCTIONAL", remarks: "" },
+  { id: 2, row_id: "00000000-0000-4000-8000-000000000002", device_id: "OG-0423", ts: 2, sim_type: "GLO", state: "OGUN", screen: true, camera: true, fingerprint: true, sim: true, charging: true, wifi: true, gps: true, battery_ok: false, battery_hours: 3.68, status: "BATTERY REPLACEMENT REQUIRED", remarks: "Battery replacement required" }
 ];
 
 async function mockFetch(url, opts) {
   const method = (opts && opts.method) || "GET";
-  calls.push({ url, method, body: opts && opts.body });
+  const body = opts && opts.body ? JSON.parse(opts.body) : null;
+  calls.push({ url, method, body: opts && opts.body, headers: opts && opts.headers });
   const json = async () => {
     if (url.includes("select=*")) return fakeRows;
+    if (method === "POST" && body) return body.map((row) => Object.assign({ id: 99 }, row));
     return [];
   };
   return { ok: true, status: 200, json };
 }
 
 const windowObj = { location: { search: "", pathname: "/ogun/" }, print() {} };
-const context = { console, document, localStorage, window: windowObj, fetch: mockFetch, calls, URLSearchParams, URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} }, Blob: function () {}, confirm: () => true, setTimeout, clearTimeout };
+const context = { console, document, localStorage, sessionStorage, window: windowObj, fetch: mockFetch, calls, URLSearchParams, URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} }, Blob: function () {}, confirm: () => true, setTimeout, clearTimeout };
 vm.createContext(context);
 
 try { vm.runInContext(pageScript, context, { filename: "page.js" }); }
@@ -67,7 +71,8 @@ const driver = `
   t("db enabled from ?state=ogun", DB.enabled === true);
   t("table = bvas_devices_ogun", DB.table === "bvas_devices_ogun", DB.table);
   t("lock active", LOCKED_STATE === "OGUN");
-  t("storage key is per-state", storageKey() === "bvas_inventory_v3_OGUN", storageKey());
+  t("storage key is per-state and session", storageKey() === "bvas_inventory_v3_OGUN_" + SESSION_ID, storageKey());
+  t("session id is stored", sessionStorage.getItem("bvas_session_v1") === SESSION_ID, sessionStorage.getItem("bvas_session_v1"));
 
   (async function () {
     await loadFromDb();
@@ -76,6 +81,13 @@ const driver = `
     t("status normalized", devices[1].status === "BATTERY REPLACEMENT REQUIRED");
     t("status pill shows Online", els.statusPill && els.statusText.textContent.indexOf("Online") !== -1, els.statusText && els.statusText.textContent);
     t("status dot is green", els.statusDot && els.statusDot.className.indexOf("green") !== -1, els.statusDot && els.statusDot.className);
+    t("database requests carry private session header", calls.every(function (c) { return c.headers && c.headers["X-BVAS-Session"] === SESSION_ID; }));
+    t("row actions expose edit", els.inventoryBody.innerHTML.indexOf('data-act="edit"') !== -1);
+    editingRowId = devices[0].rowId;
+    renderTable();
+    t("edit mode renders editable fields", els.inventoryBody.innerHTML.indexOf('data-edit-field="deviceId"') !== -1 && els.inventoryBody.innerHTML.indexOf('data-edit-comp="screen"') !== -1);
+    editingRowId = null;
+    renderTable();
 
     document.getElementById("deviceId").value = "7011";
     COMPONENTS.forEach(function (c) { compInput(c.key).checked = true; });
@@ -84,12 +96,32 @@ const driver = `
     runAssessment();
     await saveDevice();
 
-    var up = calls.filter(function (c) { return c.method === "POST" && c.url.indexOf("on_conflict=device_id") !== -1; });
+    var up = calls.filter(function (c) { return c.method === "POST" && c.url.indexOf("on_conflict=row_id") !== -1; });
     t("saveDevice upserted to db", up.length === 1);
     t("upsert hits bvas_devices_ogun", up[0].url.indexOf("/bvas_devices_ogun?") !== -1, up[0].url);
     var row = JSON.parse(up[0].body)[0];
     t("upsert maps deviceId", row.device_id === "701-1");
+    t("upsert carries stable row id", typeof row.row_id === "string" && row.row_id.length > 0);
     t("upsert keeps battery score", row.battery_ok === false && row.battery_hours < 7, JSON.stringify(row));
+
+    var edited = devices[0];
+    var editRow = {
+      querySelector: function (selector) {
+        var fields = {
+          '[data-edit-field="deviceId"]': { value: "0424" },
+          '[data-edit-field="simType"]': { value: "GLO" },
+          '[data-edit-field="batteryOk"]': { value: "true" },
+          '[data-edit-field="hours"]': { value: "8.5" },
+          '[data-edit-field="remarks"]': { value: "Corrected during review" }
+        };
+        if (fields[selector]) return fields[selector];
+        var comp = selector.match(/data-edit-comp="([^"]+)"/);
+        return comp ? { checked: true } : null;
+      }
+    };
+    await saveEditedRow(edited, editRow);
+    t("edited row updates device id", edited.deviceId === "042-4", edited.deviceId);
+    t("edited row updates status and battery", edited.batteryOk === true && edited.hours === 8.5 && edited.status === "FUNCTIONAL", edited.status);
 
     var deleteCallsBeforeClear = calls.filter(function (c) { return c.method === "DELETE"; }).length;
     document.getElementById("clearBtn").click();

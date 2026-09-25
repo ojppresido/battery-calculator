@@ -6,7 +6,7 @@
   <meta name="description" content="Per-state BVAS device health and inventory worksheet for the ICT Department." />
   <title>BVAS Device Health &amp; Inventory Worksheet | ICT Department</title>
   <meta name="theme-color" content="#0f2354" />
-  <link rel="stylesheet" href="styles.css?v=4" />
+  <link rel="stylesheet" href="styles.css?v=5" />
 </head>
 <body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col">
 
@@ -169,6 +169,7 @@
         <button type="button" id="saveBtn" class="btn-tool">Save</button>
         <button type="button" id="loadBtn" class="btn-tool">Load</button>
         <button type="button" id="clearBtn" class="btn-tool btn-tool-danger">Clear All</button>
+        <button type="button" id="newSessionBtn" class="btn-tool" title="Start a separate private browser session">New Session</button>
         <button type="button" id="backupBtn" class="btn-tool" title="Download a JSON backup of this worksheet">Backup</button>
         <button type="button" id="restoreBtn" class="btn-tool" title="Restore a JSON backup">Restore Backup</button>
         <input id="restoreFile" type="file" accept="application/json,.json" class="hidden" />
@@ -220,7 +221,7 @@
         </table>
       </div>
 
-      <p class="sheet-note">KEY: &check; = Good/Functional &nbsp;|&nbsp; &#10007; = Bad/Faulty &nbsp;|&nbsp; &ndash; = battery not yet tested &nbsp;|&nbsp; Battery threshold: 7 hours. S/N is assigned automatically in save order.</p>
+      <p class="sheet-note">KEY: &check; = Good/Functional &nbsp;|&nbsp; &#10007; = Bad/Faulty &nbsp;|&nbsp; &ndash; = battery not yet tested &nbsp;|&nbsp; Battery threshold: 7 hours. S/N is assigned automatically in save order. Use Edit on a row to correct its submitted data. Data is private to this browser session.</p>
 
       <div class="sign-grid">
         <div class="sign-box">
@@ -290,6 +291,44 @@
     const USABLE_FACTOR = 0.92;
     const MIN_THRESHOLD_HOURS = 7;
     const STORAGE_KEY_BASE = "bvas_inventory_v3";
+    const SESSION_STORAGE_KEY = "bvas_session_v1";
+    const SIM_TYPES = ["MTN", "GLO", "AIRTEL", "9MOBILE", "NO SIM"];
+
+    let memorySessionId = null;
+
+    function makeUuid() {
+      try {
+        if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+        if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+          const bytes = new Uint8Array(16);
+          crypto.getRandomValues(bytes);
+          bytes[6] = (bytes[6] & 15) | 64;
+          bytes[8] = (bytes[8] & 63) | 128;
+          const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+          return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+        }
+      } catch (e) {}
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0;
+        const v = c === "x" ? r : (r & 3) | 8;
+        return v.toString(16);
+      });
+    }
+
+    function getSessionId() {
+      try {
+        const existing = sessionStorage.getItem(SESSION_STORAGE_KEY);
+        if (existing) return existing;
+        const id = makeUuid();
+        sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+        return id;
+      } catch (e) {
+        if (!memorySessionId) memorySessionId = makeUuid();
+        return memorySessionId;
+      }
+    }
+
+    const SESSION_ID = getSessionId();
 
     const COMPONENTS = [
       { key: "screen",      label: "Screen" },
@@ -334,7 +373,9 @@
     const CALC_ONLY = !LOCKED_STATE;
 
     function storageKey() {
-      return LOCKED_STATE ? STORAGE_KEY_BASE + "_" + LOCKED_STATE.replace(/\s+/g, "_") : STORAGE_KEY_BASE;
+      return LOCKED_STATE
+        ? STORAGE_KEY_BASE + "_" + LOCKED_STATE.replace(/\s+/g, "_") + "_" + SESSION_ID
+        : STORAGE_KEY_BASE;
     }
 
     /* ---------- Supabase (per-state database) ----------
@@ -345,7 +386,7 @@
     const SUPABASE_URL = "https://fabdxxznbalfnsbttqqn.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhYmR4eHpuYmFsZm5zYnR0cXFuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAyNDQ0MTQsImV4cCI6MjEwNTgyMDQxNH0.NcQRrm9iUop2dutFfPpXwJ6KgTdkyIgj8CZdEdcbaCE";
 
-    const DB = { enabled: false, base: null, table: null };
+    const DB = { enabled: false, base: null, table: null, session: SESSION_ID };
 
     function stateTable(name) {
       return "bvas_devices_" + String(name).toLowerCase().replace(/\s+/g, "_");
@@ -355,6 +396,7 @@
       const h = {
         "apikey": SUPABASE_ANON_KEY,
         "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+        "X-BVAS-Session": SESSION_ID,
         "Content-Type": "application/json"
       };
       if (prefer) h["Prefer"] = prefer;
@@ -373,6 +415,7 @@
     function deviceToRow(d) {
       const c = d.comp || {};
       return {
+        row_id: d.rowId,
         device_id: d.deviceId,
         ts: d.ts || Date.now(),
         sim_type: d.simType || null,
@@ -388,6 +431,8 @@
 
     function rowToDevice(r) {
       return {
+        rowId: r.row_id || makeUuid(),
+        remoteId: r.id == null ? null : r.id,
         deviceId: r.device_id,
         ts: r.ts,
         simType: r.sim_type,
@@ -406,20 +451,30 @@
     async function dbUpsert(d) {
       if (!DB.enabled) return true;
       try {
-        const res = await fetch(DB.base + "/" + DB.table + "?on_conflict=device_id", {
+        const res = await fetch(DB.base + "/" + DB.table + "?on_conflict=row_id", {
           method: "POST",
           headers: dbHeaders("resolution=merge-duplicates,return=representation"),
           body: JSON.stringify([deviceToRow(d)])
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
+        try {
+          const returned = await res.json();
+          if (Array.isArray(returned) && returned[0]) {
+            if (returned[0].row_id) d.rowId = returned[0].row_id;
+            if (returned[0].id != null) d.remoteId = returned[0].id;
+          }
+        } catch (e) {}
         return true;
       } catch (e) { return false; }
     }
 
-    async function dbDelete(id) {
-      if (!DB.enabled) return true;
+    async function dbDelete(d) {
+      if (!DB.enabled || !d) return true;
+      const key = d.remoteId == null
+        ? "row_id=eq." + encodeURIComponent(d.rowId)
+        : "id=eq." + encodeURIComponent(d.remoteId);
       try {
-        const res = await fetch(DB.base + "/" + DB.table + "?device_id=eq." + encodeURIComponent(id), {
+        const res = await fetch(DB.base + "/" + DB.table + "?" + key, {
           method: "DELETE",
           headers: dbHeaders()
         });
@@ -459,6 +514,7 @@
       saveBtn: $("saveBtn"),
       loadBtn: $("loadBtn"),
       clearBtn: $("clearBtn"),
+      newSessionBtn: $("newSessionBtn"),
       backupBtn: $("backupBtn"),
       restoreBtn: $("restoreBtn"),
       restoreFile: $("restoreFile"),
@@ -484,6 +540,7 @@
     let pending = null;      // { hours, ok } — battery result awaiting attach
     let retestTarget = null; // deviceId being re-tested
     let devices = [];
+    let editingRowId = null;
 
     /* ---------- helpers ---------- */
 
@@ -512,8 +569,30 @@
       return devices.find((d) => d.deviceId === id);
     }
 
+    function findDeviceByRowId(rowId) {
+      return devices.find((d) => d.rowId === rowId);
+    }
+
+    function normalizeDevice(d) {
+      if (!d) return d;
+      d.rowId = d.rowId || makeUuid();
+      d.remoteId = d.remoteId == null ? null : d.remoteId;
+      d.deviceId = String(d.deviceId == null ? "" : d.deviceId).trim();
+      d.comp = d.comp || {};
+      COMPONENTS.forEach((c) => { d.comp[c.key] = !!d.comp[c.key]; });
+      d.batteryOk = d.batteryOk == null ? null : !!d.batteryOk;
+      d.hours = d.hours == null || d.hours === "" ? null : Number(d.hours);
+      if (d.hours != null && !Number.isFinite(d.hours)) d.hours = null;
+      d.simType = d.simType || "";
+      d.remarks = d.remarks || "";
+      d.state = d.state || LOCKED_STATE || "OGUN";
+      d.status = statusOf(d);
+      return d;
+    }
+
     function statusOf(d) {
-      const hw = FUNCTIONAL_COMPONENTS.every((c) => d.comp[c.key]);
+      const comp = d.comp || {};
+      const hw = FUNCTIONAL_COMPONENTS.every((c) => comp[c.key]);
       if (!hw) return "NON-FUNCTIONAL";
       if (d.batteryOk === true) return "FUNCTIONAL";
       if (d.batteryOk === false) return "BATTERY REPLACEMENT REQUIRED";
@@ -716,7 +795,7 @@
 
       if (findDevice(id)) return flash(`Device ID <strong>${esc(id)}</strong> is already on the sheet — duplicate not saved.`, true);
 
-      const d = { deviceId: id, ts: Date.now() };
+      const d = { rowId: makeUuid(), remoteId: null, deviceId: id, ts: Date.now() };
       d.comp = comp;
       d.simType = els.simType.value;
       d.state = els.fieldState.value;
@@ -769,6 +848,97 @@
       return `<span class="tag tag-pending">&ndash; pending</span>`;
     }
 
+    function editableBatteryCell(d) {
+      const result = d.batteryOk === true ? "true" : d.batteryOk === false ? "false" : "";
+      return `<div class="table-edit-stack">
+        <select class="table-edit-select" data-edit-field="batteryOk" aria-label="Battery result">
+          <option value=""${result === "" ? " selected" : ""}>Pending</option>
+          <option value="true"${result === "true" ? " selected" : ""}>Good</option>
+          <option value="false"${result === "false" ? " selected" : ""}>Weak</option>
+        </select>
+        <input class="table-edit-input table-edit-hours" data-edit-field="hours" type="number" min="0" step="0.01" value="${d.hours == null ? "" : esc(d.hours)}" aria-label="Battery hours" />
+      </div>`;
+    }
+
+    function editableComponentCell(d, component) {
+      return `<input class="table-edit-check" type="checkbox" data-edit-comp="${component.key}"${d.comp[component.key] ? " checked" : ""} aria-label="${esc(component.label)}" />`;
+    }
+
+    function editableSimCell(d) {
+      return `<select class="table-edit-select" data-edit-field="simType" aria-label="SIM type">
+        <option value=""${!d.simType ? " selected" : ""}>—</option>
+        ${SIM_TYPES.map((type) => `<option value="${esc(type)}"${type === d.simType ? " selected" : ""}>${esc(type)}</option>`).join("")}
+      </select>`;
+    }
+
+    function rowActions(d) {
+      if (editingRowId === d.rowId) {
+        return `<button type="button" class="row-btn row-btn-text row-btn-save" data-act="save" data-row-id="${esc(d.rowId)}" title="Save changes">Save</button>
+          <button type="button" class="row-btn row-btn-text row-btn-cancel" data-act="cancel" data-row-id="${esc(d.rowId)}" title="Cancel changes">Cancel</button>`;
+      }
+      return `<button type="button" class="row-btn row-btn-text" data-act="edit" data-row-id="${esc(d.rowId)}" title="Edit row">Edit</button>
+        <button type="button" class="row-btn" data-act="batt" data-row-id="${esc(d.rowId)}" title="Battery re-test">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2M6 11h7"/></svg>
+        </button>
+        <button type="button" class="row-btn row-btn-del" data-act="del" data-row-id="${esc(d.rowId)}" title="Remove device">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>`;
+    }
+
+    async function saveEditedRow(d, row) {
+      if (!row) return flash("The edit row is no longer available.", true);
+      const idInput = row.querySelector('[data-edit-field="deviceId"]');
+      const simInput = row.querySelector('[data-edit-field="simType"]');
+      const batteryInput = row.querySelector('[data-edit-field="batteryOk"]');
+      const hoursInput = row.querySelector('[data-edit-field="hours"]');
+      const remarksInput = row.querySelector('[data-edit-field="remarks"]');
+      if (!idInput || !simInput || !batteryInput || !hoursInput || !remarksInput) {
+        return flash("Complete every editable field before saving.", true);
+      }
+
+      const nextId = maskDeviceId(idInput.value).replace(/-$/, "");
+      if (!nextId) return flash("Enter a Device ID.", true);
+      if (devices.some((other) => other.rowId !== d.rowId && other.deviceId === nextId)) {
+        return flash(`Device ID <strong>${esc(nextId)}</strong> is already on the sheet.`, true);
+      }
+
+      const hoursText = hoursInput.value.trim();
+      const hours = hoursText === "" ? null : Number(hoursText);
+      if (hours != null && (!Number.isFinite(hours) || hours <= 0)) {
+        return flash("Battery hours must be a positive number or blank.", true);
+      }
+      const nextBattery = batteryInput.value === "" ? null : batteryInput.value === "true";
+      if (nextBattery !== null && hours == null) {
+        return flash("Enter battery hours when selecting Good or Weak.", true);
+      }
+
+      const oldRemarks = d.remarks || "";
+      const oldAutoRemarks = autoRemarks(d);
+      const remarksWasAutomatic = !oldRemarks || oldRemarks === oldAutoRemarks || oldRemarks === "Battery test pending";
+      const remarksValue = remarksInput.value.trim();
+      d.deviceId = nextId;
+      d.simType = simInput.value;
+      d.batteryOk = nextBattery;
+      d.hours = hours;
+      COMPONENTS.forEach((c) => {
+        const input = row.querySelector('[data-edit-comp="' + c.key + '"]');
+        d.comp[c.key] = !!(input && input.checked);
+      });
+      d.remarks = remarksValue === "" || (remarksValue === oldRemarks && remarksWasAutomatic)
+        ? autoRemarks(d)
+        : remarksValue;
+      d.status = statusOf(d);
+      editingRowId = null;
+      renderTable();
+      persist();
+
+      if (DB.enabled) {
+        const ok = await dbUpsert(d);
+        setDbStatus(ok ? "ok" : "warn", ok ? "online \u00b7 " + DB.table.replace(/^bvas_devices_/, "") : "offline \u00b7 saved locally");
+      }
+      flash(`Row <strong>${esc(d.deviceId)}</strong> updated.`, false);
+    }
+
     function renderStats() {
       const count = (s) => devices.filter((d) => d.status === s).length;
       els.stats.innerHTML = `
@@ -778,7 +948,9 @@
         <div class="stat-card"><span class="stat-label">Non-functional</span><span class="stat-value stat-red">${count("NON-FUNCTIONAL")}</span></div>`;
     }
 
+
     function renderTable() {
+      devices.forEach(normalizeDevice);
       renderStats();
       els.countPill.classList.remove("hidden");
       els.countPill.textContent = devices.length + " device" + (devices.length === 1 ? "" : "s");
@@ -791,38 +963,48 @@
       } else if (!shown.length) {
         els.inventoryBody.innerHTML = `<tr class="empty-row"><td colspan="13">No device with ID matching &ldquo;${esc(term)}&rdquo; was found.</td></tr>`;
       } else {
-        const shownIds = new Set(shown.map((d) => d.deviceId));
+        const shownRows = new Set(shown.map((d) => d.rowId));
         els.inventoryBody.innerHTML = devices.map((d, i) => {
-          if (!shownIds.has(d.deviceId)) return "";
+          if (!shownRows.has(d.rowId)) return "";
+          const editing = editingRowId === d.rowId;
           return `
-          <tr>
+          <tr${editing ? ' class="is-editing"' : ""}>
           <td class="c col-sn">${i + 1}</td>
-          <td class="id sticky-col sticky-col-2">${esc(d.deviceId)}</td>
-          <td class="c col-batt ${d.batteryOk === false ? "bad" : d.batteryOk === true ? "ok" : ""}">${batteryCell(d)}</td>
-          ${COMPONENTS.map((c) => `<td class="c ${d.comp[c.key] ? "ok" : "bad"}">${mark(d.comp[c.key])}</td>`).join("")}
-          <td class="c simspec">${esc(d.simType || "\u2014")}</td>
-          <td class="col-remarks">${esc(d.remarks)}</td>
-          <td class="c row-act print:hidden">
-            <button type="button" class="row-btn" data-act="batt" data-id="${esc(d.deviceId)}" title="Battery re-test">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2M6 11h7"/></svg>
-            </button>
-            <button type="button" class="row-btn row-btn-del" data-act="del" data-id="${esc(d.deviceId)}" title="Remove device">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12"/></svg>
-            </button>
-          </td>
+          <td class="id sticky-col sticky-col-2">${editing
+            ? `<input class="table-edit-input" data-edit-field="deviceId" value="${esc(d.deviceId)}" aria-label="Device ID" />`
+            : esc(d.deviceId)}</td>
+          <td class="c col-batt ${d.batteryOk === false ? "bad" : d.batteryOk === true ? "ok" : ""}">${editing ? editableBatteryCell(d) : batteryCell(d)}</td>
+          ${COMPONENTS.map((c) => `<td class="c ${d.comp[c.key] ? "ok" : "bad"}">${editing ? editableComponentCell(d, c) : mark(d.comp[c.key])}</td>`).join("")}
+          <td class="c simspec">${editing ? editableSimCell(d) : esc(d.simType || "\u2014")}</td>
+          <td class="col-remarks">${editing
+            ? `<input class="table-edit-input" data-edit-field="remarks" value="${esc(d.remarks)}" aria-label="Remarks" />`
+            : esc(d.remarks)}</td>
+          <td class="c row-act print:hidden">${rowActions(d)}</td>
         </tr>`;
         }).join("");
       }
 
       els.inventoryBody.querySelectorAll(".row-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const id = btn.getAttribute("data-id");
-          if (btn.getAttribute("data-act") === "batt") startRetest(id);
-          else if (confirm("Remove " + id + " from the sheet?")) {
-            devices = devices.filter((d) => d.deviceId !== id);
+        btn.addEventListener("click", async () => {
+          const rowId = btn.getAttribute("data-row-id");
+          const d = findDeviceByRowId(rowId);
+          if (!d) return;
+          const action = btn.getAttribute("data-act");
+          if (action === "batt") startRetest(d.deviceId);
+          else if (action === "edit") {
+            editingRowId = rowId;
+            renderTable();
+          } else if (action === "cancel") {
+            editingRowId = null;
+            renderTable();
+          } else if (action === "save") {
+            await saveEditedRow(d, btn.closest("tr"));
+          } else if (action === "del" && confirm("Remove " + d.deviceId + " from this private session?")) {
+            devices = devices.filter((item) => item.rowId !== rowId);
+            editingRowId = null;
             renderTable();
             persist();
-            if (DB.enabled) dbDelete(id);
+            if (DB.enabled) dbDelete(d);
           }
         });
       });
@@ -830,7 +1012,7 @@
       const total = devices.length;
       const count = (s) => devices.filter((d) => d.status === s).length;
       els.inventoryFoot.innerHTML = `<tr class="sum-row">
-        <td colspan="3" class="sum-label">Summary &middot; Devices captured: ${total}</td>
+        <td colspan="2" class="sum-label">Summary &middot; Devices captured: ${total}</td>
         <td colspan="11" class="sum-text">
           Functional: <strong>${count("FUNCTIONAL")}</strong> &nbsp;|&nbsp;
           Battery replacement: <strong>${count("BATTERY REPLACEMENT REQUIRED")}</strong> &nbsp;|&nbsp;
@@ -839,7 +1021,6 @@
         </td>
       </tr>`;
 
-      // retest dropdown
       const cur = els.retestSelect.value;
       els.retestSelect.innerHTML = '<option value="">— select a saved device —</option>' +
         devices.map((d) => `<option value="${esc(d.deviceId)}">${esc(d.deviceId)} · ${d.status}${d.batteryOk === null ? "" : d.batteryOk ? " (battery OK)" : " (battery weak)"}</option>`).join("");
@@ -860,7 +1041,7 @@
 
     function snapshot() {
       return {
-        v: 3,
+        v: 4,
         devices: devices,
         meta: {
           date: els.sheetDate.value,
@@ -875,11 +1056,7 @@
     }
 
     function restore(data) {
-      devices = (Array.isArray(data.devices) ? data.devices : []).map((d) => {
-        d.batteryOk = d.batteryOk === undefined ? null : d.batteryOk;
-        d.status = statusOf(d);
-        return d;
-      });
+      devices = (Array.isArray(data.devices) ? data.devices : []).map(normalizeDevice);
       const m = data.meta || {};
       els.sheetDate.value = m.date || "";
       els.signOfficer.value = m.officer || "";
@@ -912,14 +1089,14 @@
       setDbStatus("warn", "syncing\u2026");
       try {
         const rows = await dbFetch();
-        const byId = new Map();
-        devices.forEach((d) => byId.set(d.deviceId, d));
+        const byRowId = new Map();
+        devices.forEach((d) => byRowId.set(d.rowId, d));
         rows.forEach((r) => {
-          const ex = byId.get(r.deviceId) || {};
-          byId.set(r.deviceId, Object.assign({}, ex, r));
+          const ex = byRowId.get(r.rowId) || {};
+          byRowId.set(r.rowId, normalizeDevice(Object.assign({}, ex, r)));
         });
-        devices = Array.from(byId.values());
-        devices.forEach((d) => { d.status = statusOf(d); d.comp = d.comp || {}; });
+        devices = Array.from(byRowId.values());
+        devices.forEach(normalizeDevice);
         devices.sort((a, b) => (a.ts || 0) - (b.ts || 0));
         renderTable();
         persist();
@@ -988,8 +1165,8 @@
     }
     els.footerMeta.textContent = CALC_ONLY
       ? (LOCKED_STATE ? "Battery calculator \u00b7 " + LOCKED_STATE : "Battery calculator")
-      : (LOCKED_STATE ? "Worksheet \u00b7 " + LOCKED_STATE : "Shared worksheet");
-    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 13 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
+      : (LOCKED_STATE ? "Private session \u00b7 " + LOCKED_STATE : "Private session");
+    $("buildTag").textContent = "BVAS Field Device Maintenance Tool \u00b7 build 14 \u00b7 " + (CALC_ONLY ? "calculator only" : "full worksheet");
     if (CALC_ONLY) document.body.classList.add("calc-only");
 
     if (!CALC_ONLY) {
@@ -1047,11 +1224,16 @@
       els.restoreBtn.addEventListener("click", () => els.restoreFile.click());
       els.restoreFile.addEventListener("change", restoreBackupFile);
       els.clearBtn.addEventListener("click", () => {
-        if (!devices.length || confirm("Clear all captured devices from this browser? Supabase data will not be affected.")) {
+        if (!devices.length || confirm("Clear all captured devices from this private session? Supabase data will not be affected.")) {
           devices = [];
           renderTable();
           persist();
         }
+      });
+      els.newSessionBtn.addEventListener("click", () => {
+        if (!confirm("Start a new private session? The current session's remote data will not be shown in the new session.")) return;
+        try { sessionStorage.removeItem(SESSION_STORAGE_KEY); } catch (e) {}
+        window.location.reload();
       });
       [els.sheetDate, els.signOfficer, els.signReviewer]
         .forEach((i) => i.addEventListener("change", persist));

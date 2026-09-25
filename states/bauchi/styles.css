@@ -477,13 +477,13 @@ select.field {
 
 .sheet-table {
   width: 100%;
-  min-width: 74rem;
+  min-width: 80rem;
   table-layout: fixed;
   font-size: .75rem;
 }
 .w-sn { width: 2.75rem; }
 .w-id { width: 8.5rem; }
-.w-batt { width: 6rem; }
+.w-batt { width: 8rem; }
 .w-screen { width: 4.5rem; }
 .w-camera { width: 6rem; }
 .w-fp { width: 6.5rem; }
@@ -492,8 +492,8 @@ select.field {
 .w-wifi { width: 4rem; }
 .w-gps { width: 3.5rem; }
 .w-sim { width: 5.5rem; }
-.w-rem { width: 13rem; }
-.w-act { width: 4.5rem; }
+.w-rem { width: 15rem; }
+.w-act { width: 8.5rem; }
 .sheet-table th, .sheet-table td {
   border: 1px solid var(--brand-200);
   padding: .5rem .375rem;
@@ -564,6 +564,26 @@ th.col-sn, td.col-sn { position: sticky; left: 0; z-index: 3; }
 .row-btn:hover { background: var(--brand-600); color: #fff; }
 .row-btn-del { color: var(--red-700); border-color: var(--red-200); }
 .row-btn-del:hover { background: var(--red-700); color: #fff; }
+.row-btn-text { width: auto; min-width: 2.75rem; padding: 0 .45rem; font-size: .6875rem; }
+.row-btn-save { color: var(--green-800); border-color: var(--emerald-200); }
+.row-btn-save:hover { background: var(--green-700); color: #fff; }
+.row-btn-cancel { color: var(--gray-700); }
+.row-btn-cancel:hover { background: var(--gray-700); color: #fff; }
+.sheet-table tr.is-editing td { background: var(--brand-50); }
+.table-edit-input, .table-edit-select {
+  width: 100%;
+  min-width: 0;
+  padding: .3rem .35rem;
+  border: 1px solid var(--brand-200);
+  border-radius: .25rem;
+  background: #fff;
+  color: var(--gray-800);
+  font-size: .75rem;
+}
+.table-edit-input:focus, .table-edit-select:focus { outline: 2px solid var(--brand-200); outline-offset: 0; }
+.table-edit-hours { min-width: 4.5rem; }
+.table-edit-stack { display: grid; gap: .25rem; }
+.table-edit-check { width: 1rem; height: 1rem; accent-color: var(--brand-600); }
 
 .sheet-table tfoot .sum-row td { background: var(--brand-100); font-weight: 700; color: var(--brand-900); }
 .sheet-table tfoot .sum-label { text-transform: uppercase; letter-spacing: .04em; font-size: .75rem; }
@@ -647,7 +667,7 @@ footer > div { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
   .sheet-table { min-width: 0 !important; width: 100% !important; font-size: 6.5pt; table-layout: fixed; }
   .w-sn { width: 3% !important; }
   .w-id { width: 9% !important; }
-  .w-batt { width: 6.5% !important; }
+  .w-batt { width: 8% !important; }
   .w-screen { width: 4.5% !important; }
   .w-camera { width: 6.5% !important; }
   .w-fp { width: 7% !important; }
@@ -656,7 +676,7 @@ footer > div { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
   .w-wifi { width: 4.5% !important; }
   .w-gps { width: 4% !important; }
   .w-sim { width: 5.5% !important; }
-  .w-rem { width: 30% !important; }
+  .w-rem { width: 32% !important; }
   .w-act { width: 0 !important; }
   .sheet-table th.col-act, .sheet-table td.row-act { display: none !important; }
   .sticky-col, th.col-sn, td.col-sn { position: static !important; }

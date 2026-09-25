@@ -76,11 +76,18 @@ const localStorage = {
   setItem: (k, v) => { store[k] = String(v); },
   removeItem: (k) => { delete store[k]; },
 };
+const sessionStore = {};
+const sessionStorage = {
+  getItem: (k) => (k in sessionStore ? sessionStore[k] : null),
+  setItem: (k, v) => { sessionStore[k] = String(v); },
+  removeItem: (k) => { delete sessionStore[k]; },
+};
 
 const context = {
   console,
   document,
   localStorage,
+  sessionStorage,
   window: { location: { search: "", pathname: "/ogun/" }, print() {} },
   URLSearchParams,
   URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },

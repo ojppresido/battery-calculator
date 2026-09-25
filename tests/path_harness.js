@@ -45,9 +45,11 @@ function freshSandbox(search, pathname) {
   const document = { getElementById: makeEl, createElement: () => makeEl("_x"), body: bodyStub, addEventListener(ev, fn) { (docListeners[ev] = docListeners[ev] || []).push(fn); } };
   const store = {};
   const localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
+  const sessionStore = {};
+  const sessionStorage = { getItem: (k) => (k in sessionStore ? sessionStore[k] : null), setItem: (k, v) => { sessionStore[k] = String(v); }, removeItem: (k) => { delete sessionStore[k]; } };
   elCache.clear();
   const context = {
-    console, document, localStorage,
+    console, document, localStorage, sessionStorage,
     window: { location: { search: search || "", pathname: pathname || "/" }, print() {} },
     fetch: async () => ({ ok: true, status: 200, json: async () => [] }),
     URLSearchParams,
@@ -92,8 +94,9 @@ function caseFull(name, search, pathname, expectState, expectKey) {
   const r = vm.runInContext(`
     var ok = true;
     ok &= (LOCKED_STATE === ${JSON.stringify(expectState)}) && (CALC_ONLY === false);
-    ok &= storageKey() === ${JSON.stringify(expectKey)};
-    ok &= document.body.className.indexOf("calc-only") === -1;
+     ok &= storageKey() === ${JSON.stringify(expectKey)} + "_" + SESSION_ID;
+     ok &= sessionStorage.getItem("bvas_session_v1") === SESSION_ID;
+     ok &= document.body.className.indexOf("calc-only") === -1;
     ok &= els.finalStatus !== null && els.formMsg !== null;
     ok &= els.fieldState.value === ${JSON.stringify(expectState)} && els.fieldState.disabled === true;
     ok &= els.checkGrid.innerHTML.indexOf("comp_") !== -1;
