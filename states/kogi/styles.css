@@ -280,6 +280,36 @@ input:focus::placeholder { color: #c3c9d4; }
 .field:focus { outline: none; border-color: var(--brand-500); box-shadow: 0 0 0 3px var(--brand-100); }
 .field-sm { padding: .625rem 1rem; font-size: .875rem; font-weight: 500; }
 
+/* ---------- Device ID OCR scan ---------- */
+.scan-btn {
+  display: flex; align-items: center; justify-content: center;
+  align-self: stretch;
+  width: 3.25rem;
+  border: 1px solid var(--gray-300);
+  border-radius: .5rem;
+  background: #fff;
+  color: var(--brand-600);
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+.scan-btn:hover { border-color: var(--brand-500); background: var(--brand-50); }
+.scan-btn:focus-visible { outline: 2px solid var(--brand-500); outline-offset: 2px; }
+.scan-btn:disabled { cursor: progress; opacity: .55; }
+.scan-btn svg { width: 1.4rem; height: 1.4rem; }
+.scan-btn.is-busy svg { animation: scan-pulse 1s ease-in-out infinite; }
+
+@keyframes scan-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .35; transform: scale(.9); }
+}
+
+.scan-msg { margin-top: .375rem; font-size: .75rem; font-weight: 600; color: var(--gray-500); }
+.scan-msg:empty { display: none; }
+.scan-msg-busy { color: var(--gray-500); }
+.scan-msg-ok { color: var(--green-700); }
+.scan-msg-warn { color: var(--orange-800); }
+.scan-msg-error { color: var(--red-700); }
+
 select.field {
   appearance: none; -webkit-appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f2c68' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' d='M6 9l6 6 6-6'/%3E%3C/svg%3E");

@@ -6,7 +6,7 @@
   <meta name="description" content="Per-state BVAS device health and inventory worksheet for the ICT Department." />
   <title>BVAS Device Health &amp; Inventory Worksheet | ICT Department</title>
   <meta name="theme-color" content="#0f2354" />
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col">
 
@@ -80,12 +80,23 @@
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
-        <label class="block">
-          <span class="block text-sm font-medium text-gray-700 mb-1">Device ID</span>
-          <input id="deviceId" type="text" autocomplete="off" inputmode="numeric" maxlength="7"
-                 pattern="[0-9]{3}-[0-9]{3}" required placeholder="101-701"
-                 class="field uppercase" />
-        </label>
+        <div>
+          <label for="deviceId" class="block text-sm font-medium text-gray-700 mb-1">Device ID</label>
+          <div class="flex gap-2">
+            <input id="deviceId" type="text" autocomplete="off" inputmode="numeric" maxlength="7"
+                   pattern="[0-9]{3}-[0-9]{3}" required placeholder="101-701"
+                   class="field uppercase flex-1 min-w-0" />
+            <button type="button" id="scanBtn" class="scan-btn shrink-0"
+                    title="Scan the Device ID from a photo (OCR)" aria-label="Scan Device ID from a photo">
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 8.5A1.5 1.5 0 0 1 4.5 7h2.2a1 1 0 0 0 .83-.45l.94-1.4A1 1 0 0 1 9.3 4.7h5.4a1 1 0 0 1 .83.45l.94 1.4a1 1 0 0 0 .83.45h2.2A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z" />
+                <circle cx="12" cy="12.5" r="3.25" />
+              </svg>
+            </button>
+          </div>
+          <input type="file" id="scanFile" accept="image/*" capture="environment" class="hidden" />
+          <p id="scanMsg" class="scan-msg" role="status" aria-live="polite"></p>
+        </div>
         <label class="block">
           <span class="block text-sm font-medium text-gray-700 mb-1">SIM Type</span>
           <select id="simType" class="field" required>
@@ -290,6 +301,28 @@
     const DEVICE_ID_HINT = "Enter the Device ID in the format 101-701 (three digits, a hyphen, three digits).";
     const SIM_TYPES = ["MTN", "GLO", "AIRTEL", "9MOBILE", "NO SIM"];
 
+    /* ---------- OCR (Device ID scan) ----------
+       The sticker on the device reads INEC/ZT/245-239; OCR only reliably reads the
+       245-239 part, so the text is scanned for the NNN-NNN run rather than matched
+       against the whole label. Tesseract.js is fetched from a CDN on first use only
+       (nothing is uploaded — recognition runs in the browser). To run fully offline
+       on a LAN, drop tesseract.min.js into ./vendor/ and point OCR_SCRIPT_URL at it. */
+    const OCR_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+    const OCR_LANG = "eng";
+    // Digits, plus the glyphs Tesseract commonly returns in place of one. The text is
+    // upper-cased before lookup, so only upper-case letters need an entry.
+    const OCR_DIGIT_MAP = {
+      "0": "0", "1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
+      "O": "0", "Q": "0", "D": "0", "U": "0",
+      "I": "1", "L": "1", "|": "1", "!": "1",
+      "Z": "2",
+      "A": "4",
+      "S": "5",
+      "G": "6",
+      "T": "7", "Y": "7",
+      "B": "8"
+    };
+
     let memorySessionId = null;
 
     function makeUuid() {
@@ -493,6 +526,9 @@
       minutes: $("minutes"),
       batteryBanner: $("batteryBanner"),
       deviceId: $("deviceId"),
+      scanBtn: $("scanBtn"),
+      scanFile: $("scanFile"),
+      scanMsg: $("scanMsg"),
       simType: $("simType"),
       fieldState: $("fieldState"),
       checkGrid: $("checkGrid"),
@@ -533,6 +569,7 @@
     let retestTarget = null; // deviceId being re-tested
     let devices = [];
     let editingRowId = null;
+    let ocrEnginePromise = null;
 
     /* ---------- helpers ---------- */
 
@@ -789,6 +826,280 @@
       const id = maskDeviceId(text).replace(/-$/, "");
       if (!isValidDeviceId(id)) return { error: DEVICE_ID_HINT };
       return { id };
+    }
+
+    /* ---------- Device ID from scanned text ----------
+
+       Splits the OCR output into runs of digit-shaped characters, then scores every
+       way of reading six of them as NNN-NNN. Anything scanned keeps the typed value
+       as the only source of truth for the sheet — this just fills the box, the
+       officer still confirms it against the sticker before saving. */
+
+    const OCR_SEPARATORS = "-‐‑‒–—―/_:.,·•~=|'’`()[]{} \t";
+    const OCR_MIN_SCORE = 40;
+
+    // Maps every character of the scanned text to a digit (or null), counting the
+    // characters that had to be substituted for a digit so guessy runs can be
+    // discounted.
+    function ocrDigits(text) {
+      const raw = String(text == null ? "" : text)
+        .replace(/[\u200b-\u200f\ufeff]/g, "")
+        .replace(/[\u2010-\u2015]/g, "-")
+        .replace(/[\uff10-\uff19]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xff10 + 48))
+        .toUpperCase();
+      const out = [];
+      for (const ch of raw) {
+        const digit = OCR_DIGIT_MAP[ch] || null;
+        out.push({
+          ch: ch,
+          digit: digit,
+          guess: digit !== null && !(ch >= "0" && ch <= "9") ? 1 : 0,
+          sep: OCR_SEPARATORS.indexOf(ch) !== -1
+        });
+      }
+      return out;
+    }
+
+    // Runs of digit-shaped characters, then a single bridge for the NNN<sep>NNN form
+    // the sticker actually uses. Only three real digits either side of a separator
+    // join up, so dates like 2024-05-12 stay three short runs instead of an ID.
+    function ocrRuns(chars) {
+      const runs = [];
+      let cur = null;
+      for (let i = 0; i < chars.length; i++) {
+        const c = chars[i];
+        if (!c.digit) { cur = null; continue; }
+        if (cur && i > 0 && chars[i - 1].digit) {
+          cur.digits += c.digit;
+          cur.guesses += c.guess;
+          cur.end = i;
+        } else {
+          cur = { digits: c.digit, guesses: c.guess, start: i, end: i, sepAt: -1 };
+          runs.push(cur);
+        }
+      }
+      for (let i = 0; i < runs.length - 1; i++) {
+        const a = runs[i];
+        const b = runs[i + 1];
+        if (!a.guesses && !b.guesses && a.digits.length === 3 && b.digits.length === 3 &&
+            b.start - a.end === 2 && chars[a.end + 1].sep) {
+          a.digits += b.digits;
+          a.sepAt = 3;
+          a.end = b.end;
+          runs.splice(i + 1, 1);
+          i--;
+        }
+      }
+      return runs;
+    }
+
+    function ocrCandidates(text) {
+      const chars = ocrDigits(text);
+      const runs = ocrRuns(chars);
+      const out = [];
+      const push = (digits, base, guessPenalty, start) => {
+        if (base < OCR_MIN_SCORE) return;
+        if (!/^\d{6}$/.test(digits)) return;
+        const id = digits.slice(0, 3) + "-" + digits.slice(3);
+        if (out.some((c) => c.id === id)) return;
+        // A guessed character (O for 0, S for 5...) costs a lot: a run made entirely
+        // of them is a word, not an ID. Ties break towards the top of the photo.
+        const score = base - 12 * guessPenalty + (12 - Math.min(start, 12));
+        out.push({ id: id, score: score });
+      };
+
+      runs.forEach((r, i) => {
+        if (r.digits.length === 6) {
+          push(r.digits, r.sepAt === 3 ? 100 : 80, r.guesses, r.start);
+        } else if (r.digits.length > 6 && !r.guesses) {
+          // A run that bled into its neighbours keeps only the last six digits, but
+          // only when every character really was a digit — otherwise it was a word.
+          push(r.digits.slice(-6), 40, 0, r.start);
+        }
+        const next = runs[i + 1];
+        if (next && r.digits.length + next.digits.length === 6 && r.digits.length >= 2) {
+          const gap = next.start - r.end - 1;
+          if (gap >= 0 && gap <= 4) {
+            // 3 + 3 either side of a stray glyph is a plausible misread hyphen; any
+            // other split (e.g. the 2024-05 in a date) is not worth reporting.
+            const even = r.digits.length === 3 && next.digits.length === 3;
+            push(r.digits + next.digits, even ? 60 : 30, r.guesses + next.guesses, r.start);
+          }
+        }
+      });
+
+      out.sort((a, b) => b.score - a.score);
+      return out.filter((c) => c.score >= OCR_MIN_SCORE);
+    }
+
+    function ocrExtractDeviceId(text) {
+      const list = ocrCandidates(text);
+      return { id: list.length ? list[0].id : "", others: list.slice(1, 4).map((c) => c.id) };
+    }
+
+    function loadOcrEngine() {
+      if (typeof window !== "undefined" && window.Tesseract) return Promise.resolve(window.Tesseract);
+      if (ocrEnginePromise) return ocrEnginePromise;
+      ocrEnginePromise = new Promise((resolve, reject) => {
+        if (typeof document === "undefined" || !document.createElement) {
+          return reject(new Error("no-dom"));
+        }
+        const script = document.createElement("script");
+        script.src = OCR_SCRIPT_URL;
+        script.async = true;
+        const timer = setTimeout(() => { script.remove(); reject(new Error("timeout")); }, 45000);
+        script.onload = () => {
+          clearTimeout(timer);
+          if (typeof window !== "undefined" && window.Tesseract) resolve(window.Tesseract);
+          else reject(new Error("load-failed"));
+        };
+        script.onerror = () => { clearTimeout(timer); reject(new Error("load-failed")); };
+        const head = document.head || document.body;
+        if (head && head.appendChild) head.appendChild(script);
+        else reject(new Error("no-dom"));
+      });
+      ocrEnginePromise.catch(() => { ocrEnginePromise = null; });
+      return ocrEnginePromise;
+    }
+
+    function ocrScanMsg(text, kind) {
+      if (!els.scanMsg) return;
+      els.scanMsg.textContent = text;
+      els.scanMsg.className = "scan-msg scan-msg-" + kind;
+    }
+
+    function ocrSetBusy(busy) {
+      if (els.scanBtn) {
+        els.scanBtn.disabled = busy;
+        els.scanBtn.classList.toggle("is-busy", !!busy);
+      }
+      if (els.scanFile) els.scanFile.disabled = !!busy;
+    }
+
+    function ocrLoadBitmap(file) {
+      if (typeof createImageBitmap === "function") {
+        return createImageBitmap(file).catch(() => ocrLoadBitmapViaImg(file));
+      }
+      return ocrLoadBitmapViaImg(file);
+    }
+
+    function ocrLoadBitmapViaImg(file) {
+      return new Promise((resolve, reject) => {
+        if (typeof Image !== "function" || typeof URL === "undefined" || !URL.createObjectURL) {
+          return reject(new Error("no-image-support"));
+        }
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("image-failed")); };
+        img.src = url;
+      });
+    }
+
+    // Upscale small photos and stretch contrast so the dark digits on the sticker
+    // read cleanly. Any failure here just means the raw photo is used instead.
+    function ocrEnhance(source) {
+      if (typeof document === "undefined" || !document.createElement) return null;
+      try {
+        const w = source.naturalWidth || source.width;
+        const h = source.naturalHeight || source.height;
+        if (!w || !h) return null;
+        const scale = Math.min(3, Math.max(1, 1100 / Math.max(w, h)));
+        const cw = Math.max(1, Math.round(w * scale));
+        const chh = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = cw;
+        canvas.height = chh;
+        const ctx = canvas.getContext ? canvas.getContext("2d") : null;
+        if (!ctx) return null;
+        ctx.drawImage(source, 0, 0, cw, chh);
+        const data = ctx.getImageData(0, 0, cw, chh);
+        if (!data || !data.data) return null;
+        const px = data.data;
+        const hist = new Array(256);
+        for (let i = 0; i < 256; i++) hist[i] = 0;
+        for (let i = 0; i < px.length; i += 4) {
+          const g = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000;
+          hist[Math.max(0, Math.min(255, Math.round(g)))]++;
+        }
+        const total = cw * chh;
+        const cut = total * 0.02;
+        let lo = 0;
+        let hi = 255;
+        let run = 0;
+        for (let v = 0; v < 256; v++) { run += hist[v]; if (run > cut) { lo = v; break; } }
+        run = 0;
+        for (let v = 255; v >= 0; v--) { run += hist[v]; if (run > cut) { hi = v; break; } }
+        const span = Math.max(1, hi - lo);
+        for (let i = 0; i < px.length; i += 4) {
+          const g = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000;
+          const v = Math.max(0, Math.min(255, Math.round(((g - lo) / span) * 255)));
+          px[i] = v; px[i + 1] = v; px[i + 2] = v;
+        }
+        ctx.putImageData(data, 0, 0);
+        return canvas;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function ocrProgress(msg) {
+      if (msg && msg.status) {
+        const pct = Math.round((msg.progress || 0) * 100);
+        ocrScanMsg("Reading the photo… " + msg.status + (msg.progress ? " " + pct + "%" : ""), "busy");
+      }
+    }
+
+    async function ocrRecognize(file) {
+      const engine = await loadOcrEngine();
+      let source = file;
+      try {
+        const bitmap = await ocrLoadBitmap(file);
+        const enhanced = ocrEnhance(bitmap);
+        if (enhanced) source = enhanced;
+      } catch (e) {}
+      const result = await engine.recognize(source, OCR_LANG, { logger: ocrProgress });
+      const data = (result && result.data) || {};
+      const text = String(data.text || "");
+      const confidence = typeof data.confidence === "number" ? data.confidence : null;
+      return { text: text, confidence: confidence, found: ocrExtractDeviceId(text) };
+    }
+
+    async function ocrScanFile(file) {
+      if (!file) return;
+      if (els.deviceId.value.trim()) {
+        flash("The Device ID box already has a value — the scan will replace it.", true);
+      }
+      ocrSetBusy(true);
+      ocrScanMsg("Loading the scanner…", "busy");
+      try {
+        const out = await ocrRecognize(file);
+        if (!out.found.id) {
+          ocrScanMsg("No Device ID found in that photo — fill the box by hand, or retake the shot closer to the 245-239 part.", "error");
+          els.deviceId.focus();
+          return;
+        }
+        els.deviceId.value = out.found.id;
+        let msg = "Scanned " + out.found.id + " — check it against the sticker, then save.";
+        if (out.found.others.length) {
+          msg = "Scanned " + out.found.id + " (other readings: " + out.found.others.join(", ") + ") — check the digits against the sticker, then save.";
+        } else if (out.confidence !== null && out.confidence < 60) {
+          msg = "Low-confidence scan: " + out.found.id + " — check every digit against the sticker, then save.";
+        }
+        ocrScanMsg(msg, out.found.others.length || (out.confidence !== null && out.confidence < 60) ? "warn" : "ok");
+        els.deviceId.focus();
+      } catch (e) {
+        ocrScanMsg("The scanner could not start (it needs internet the first time it is used). Type the Device ID instead.", "error");
+      } finally {
+        ocrSetBusy(false);
+        if (els.scanFile) els.scanFile.value = "";
+      }
+    }
+
+    function ocrHandleScanInput(e) {
+      const input = e && e.target ? e.target : els.scanFile;
+      const file = input && input.files ? input.files[0] : null;
+      if (file) ocrScanFile(file);
     }
 
     function requireSimType(value) {
@@ -1205,6 +1516,8 @@
         const masked = maskDeviceId(els.deviceId.value);
         if (els.deviceId.value !== masked) els.deviceId.value = masked;
       });
+      els.scanBtn.addEventListener("click", () => els.scanFile.click());
+      els.scanFile.addEventListener("change", ocrHandleScanInput);
       els.inventoryBody.addEventListener("input", (e) => {
         const input = e.target && e.target.closest ? e.target.closest('[data-edit-field="deviceId"]') : null;
         if (!input) return;

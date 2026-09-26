@@ -66,6 +66,9 @@ const docListeners = {};
 const document = {
   getElementById: makeEl,
   createElement: () => makeEl("_created_" + Math.random()),
+  // The OCR loader injects a <script> into <head>; fail it straight away so the
+  // "no network" path is exercised without a 45s timeout.
+  head: { appendChild(el) { if (el && typeof el.onerror === "function") el.onerror(); } },
   body: { appendChild() {} },
   addEventListener(ev, fn) { (docListeners[ev] = docListeners[ev] || []).push(fn); },
 };
@@ -218,8 +221,87 @@ const driver = `
   saveDevice();
   t("duplicate rejected: count unchanged", devices.length === before, "before=" + before + " after=" + devices.length);
   t("duplicate rejected: error shown", els.formMsg.className.indexOf("text-red-700") !== -1, els.formMsg.className);
-
-  console.log(context_test_failed ? "RESULT: FAILURES" : "RESULT: ALL PASS");
 `;
 
 vm.runInContext(driver, context, { filename: "driver.js" });
+
+/* ---- OCR: scanned text -> Device ID ---- */
+const ocrDriver = `
+  (function () {
+    function x(name, expected, text) {
+      var got = ocrExtractDeviceId(text).id;
+      var ok = got === expected;
+      console.log((ok ? "PASS" : "FAIL") + ": ocr " + name +
+        (ok ? "" : "  [expected " + JSON.stringify(expected) + " got " + JSON.stringify(got) + "]"));
+      if (!ok) context_test_failed = true;
+    }
+
+    x("plain 245-239", "245-239", "245-239");
+    x("sticker text INEC/ZT/245-239", "245-239", "INEC/ZT/245-239");
+    x("hyphen lost", "245-239", "245239");
+    x("space instead of hyphen", "245-239", "245 239");
+    x("tilde instead of hyphen", "245-239", "245~239");
+    x("O read for 0 in 2O5-239", "205-239", "2O5-239");
+    x("S read for 5", "245-239", "24S-Z39");
+    x("A read for 4", "245-239", "2A5-Z39");
+    x("stray glyph splits 3+3", "245-239", "245 & 239");
+    x("leading noise dropped", "245-239", "### 245-239 ###");
+    x("label text around the id", "245-239", "BVAS KITU 245-239 OK");
+    x("extra digit in front", "245-239", "1245239");
+    x("first of two ids wins", "245-239", "245-239 or 245-231");
+    x("no six digits -> nothing", "", "SAMSUNG GALAXY");
+    x("date alone is not a device id", "", "2024-05-12");
+    x("letters that look like digits are not an id", "", "NO DIGITS HERE");
+    x("empty text -> nothing", "", "");
+
+    var dupes = ocrExtractDeviceId("245-239 245-239");
+    t("repeated id reported once", dupes.id === "245-239" && dupes.others.length === 0, JSON.stringify(dupes));
+
+    var idEl = document.getElementById("deviceId");
+    var msg = function () { return document.getElementById("scanMsg").textContent; };
+
+    /* scan flow: engine stubbed, no real Tesseract / canvas in the sandbox */
+    window.Tesseract = {
+      recognize: function () { return Promise.resolve({ data: { text: "INEC/ZT/245-239", confidence: 88 } }); }
+    };
+    idEl.value = "";
+    return ocrScanFile({ name: "sticker.jpg" }).then(function () {
+      t("scan fills the device id", idEl.value === "245-239", JSON.stringify(idEl.value));
+      t("scan reports the reading", msg().indexOf("245-239") !== -1, msg());
+      t("scan re-enables the button", document.getElementById("scanBtn").disabled === false);
+
+      /* nothing readable -> the officer types it instead */
+      window.Tesseract.recognize = function () { return Promise.resolve({ data: { text: "NO DIGITS HERE", confidence: 20 } }); };
+      idEl.value = "";
+      return ocrScanFile({ name: "blur.jpg" });
+    }).then(function () {
+      t("unreadable scan leaves the box empty", idEl.value === "");
+      t("unreadable scan explains what to do", msg().indexOf("No Device ID found") !== -1, msg());
+
+      /* low confidence -> still filled, but flagged for checking */
+      window.Tesseract.recognize = function () { return Promise.resolve({ data: { text: "245-239", confidence: 25 } }); };
+      idEl.value = "";
+      return ocrScanFile({ name: "faint.jpg" });
+    }).then(function () {
+      t("low-confidence scan still fills the box", idEl.value === "245-239", JSON.stringify(idEl.value));
+      t("low-confidence scan asks for a check", msg().indexOf("Low-confidence") !== -1, msg());
+
+      /* engine unavailable (no internet on the LAN) -> no crash, manual entry still works */
+      window.Tesseract = undefined;
+      ocrEnginePromise = null;
+      idEl.value = "";
+      return ocrScanFile({ name: "x.jpg" });
+    }).then(function () {
+      t("missing engine is handled", msg().indexOf("could not start") !== -1, msg());
+      t("missing engine leaves the box empty", idEl.value === "");
+      idEl.value = "245239";
+      t("scanned ids go through the same validation", requireValidDeviceId(idEl.value).id === "245-239");
+    });
+  })();
+`;
+
+Promise.resolve(vm.runInContext(ocrDriver, context, { filename: "ocr-driver.js" })).then(() => {
+  const failed = context.context_test_failed;
+  console.log(failed ? "RESULT: FAILURES" : "RESULT: ALL PASS");
+  process.exit(failed ? 1 : 0);
+});

@@ -27,10 +27,10 @@ last path segment, so `…/states/ogun/` and `…/ogun/` both work.
 | Path | Purpose |
 |---|---|
 | `index.html` | The app (calculator + worksheet + Supabase REST client). **Authoritative source.** |
-| `styles.css` | Styling; linked cache-busted (`styles.css?v=5`). |
+| `styles.css` | Styling; linked cache-busted (`styles.css?v=6`). |
 | `build_states.js` | Regenerates one page under `states/<state>/` (copy of `index.html` + `styles.css`) per state so path URLs resolve on static hosts. Also prunes state dirs no longer in `STATES`. |
 | `states/<state>/` (e.g. `states/ogun/`, `states/ondo/`) | Generated per-state landing pages. Do not hand-edit. |
-| `tests/` | Offline logic harnesses (no network needed): `harness.js` (full worksheet), `db_harness.js` (ogun + mock Supabase), `path_harness.js` (URL-shape matrix incl. root/calc-only and ignored `?state=`). |
+| `tests/` | Offline logic harnesses (no network needed): `harness.js` (full worksheet + Device ID OCR extraction), `db_harness.js` (ogun + mock Supabase), `path_harness.js` (URL-shape matrix incl. root/calc-only and ignored `?state=`). |
 | `scripts/export_data.js` | Pulls every `bvas_devices_*` table into one JSON backup (read-only; uses the public anon key). |
 | `supabase/migrations/` | `0001` (all per-state tables + initial RLS), `0002` (added real `ONDO`, dropped placeholders), `0003` (private-session RLS, `row_id`, and editable-row support). |
 
@@ -41,6 +41,27 @@ are auto-formatted while typing; anything else (`345`, `101-70`, `101-7010`) is 
 SIM Type is required and starts on the `Select SIM type` placeholder; use `NO SIM` when a device has no
 SIM. Saving a device clears the Device ID, SIM Type, remarks, component ticks, and the battery endurance
 inputs (consumed mAh and minutes) so the next entry starts clean.
+
+### Scanning the Device ID (OCR)
+
+The camera button next to the Device ID box fills it from a photo instead of typing, to cut down
+transcription mistakes. The sticker reads `INEC/ZT/245-239` but only the `245-239` part is picked up, so
+the scan does not look for the whole label — it looks for the `NNN-NNN` run inside whatever the OCR
+returns and fills that in.
+
+- The box is **filled, not saved**: the officer still checks the digits against the sticker and presses
+  `Save Device to Sheet`. The scanned value goes through exactly the same `101-701` validation as a
+  typed one, so a scan can never put an invalid ID on the sheet.
+- If the photo is unclear the box is left empty with a short message rather than a guess. When several
+  readings are possible, or the OCR was low-confidence, the extra candidates are listed next to the box
+  so the right digits can be chosen by eye.
+- Recognition runs entirely in the browser; **the photo is never uploaded** anywhere.
+- `tesseract.js` is fetched from jsDelivr on the **first scan only** (~8 MB of engine + language data,
+  then cached by the browser). The first scan therefore needs internet, even on a LAN install. To go
+  fully offline, drop `tesseract.min.js` into `vendor/` and point `OCR_SCRIPT_URL` in `index.html` at it.
+- Reads `245-239`, `245239`, `245 239`, a misread hyphen such as `245~239`, and common glyph confusions
+  (`O`→`0`, `S`→`5`, `A`→`4`, `Z`→`2`, …). Digit-shaped letters and dates (`2024-05-12`) are not
+  reported as Device IDs.
 
 Each saved inventory row has an `Edit` action. Edit the Device ID, battery result and hours, component
 checkboxes, SIM type, or remarks, then use `Save`; `Cancel` leaves the row unchanged. The same Device ID
@@ -63,7 +84,9 @@ Supabase migration mirroring `0002` (drop old table / create new one). Never edi
 
 ## Database (Supabase)
 
-- REST via native `fetch` against `POSTGREST` — no SDK, no CDN.
+- REST via native `fetch` against `POSTGREST` — no SDK, no CDN. (The Device ID scanner is the one
+  exception: it lazily pulls `tesseract.js` from a CDN on first use. The database client has no
+  external dependency.)
 - One table per state: `bvas_devices_<state>` (`bvas_devices_ogun`, `bvas_devices_fct_abuja`, …).
 - Since migration `0003`, every table has a stable `row_id`, an `owner_key_hash`, and RLS policies that hash
   the private `X-BVAS-Session` request header before comparing ownership. Device IDs are unique per session,
