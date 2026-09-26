@@ -309,6 +309,31 @@
        on a LAN, drop tesseract.min.js into ./vendor/ and point OCR_SCRIPT_URL at it. */
     const OCR_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
     const OCR_LANG = "eng";
+    /* A single pass is not enough for a phone photo of a sticker: small text, a
+       sideways phone, glare and a dark shell each defeat it on their own. Each pass
+       re-reads the same photo with one thing changed, and the readings that several
+       passes agree on win. Order is cheapest-and-most-likely first, and the cascade
+       stops as soon as an answer is agreed. */
+    const OCR_PASSES = [
+      { rot: 0, bin: "otsu", note: "" },
+      { rot: 0, bin: "fixed", note: "" },
+      { rot: 0, bin: "none", note: "" },
+      { rot: 90, bin: "otsu", note: "turned 90°" },
+      { rot: 180, bin: "otsu", note: "upside down" },
+      { rot: 270, bin: "otsu", note: "turned 90°" },
+      { rot: 90, bin: "fixed", note: "turned 90°" },
+    ];
+    // A cut at 60% grey: measured on low-contrast photos, where the adaptive cut
+    // below washes the ink out but this plain cut still separates it.
+    const OCR_FIXED_CUT = 153;
+    // Tesseract reads best around 300 dpi, so a tiny photo is scaled up, while a
+    // 50/108-megapixel camera photo is scaled down: feeding those pixels whole
+    // makes the engine time out and find nothing.
+    const OCR_MIN_EDGE = 1400;
+    const OCR_MAX_EDGE = 3400;
+    // PSM 6 (one uniform block) beats the default PSM 3 (full page layout) on
+    // stickers, which are a single line in the middle of a busy photo.
+    const OCR_PSM = 6;
     // Digits, plus the glyphs Tesseract commonly returns in place of one. The text is
     // upper-cased before lookup, so only upper-case letters need an entry.
     const OCR_DIGIT_MAP = {
@@ -570,6 +595,12 @@
     let devices = [];
     let editingRowId = null;
     let ocrEnginePromise = null;
+    let ocrWorkerPromise = null;
+    let ocrWorker = null;
+    let ocrAborted = false;
+    let ocrBusy = false;
+    let ocrPassNote = "";
+    let ocrCancelReject = null;
 
     /* ---------- helpers ---------- */
 
@@ -968,10 +999,15 @@
       els.scanMsg.className = "scan-msg scan-msg-" + kind;
     }
 
+    // While a scan is running the same button cancels it, so a long cascade is never
+    // a dead end on a phone that is struggling with the photo.
     function ocrSetBusy(busy) {
+      ocrBusy = !!busy;
       if (els.scanBtn) {
-        els.scanBtn.disabled = busy;
+        els.scanBtn.disabled = false;
         els.scanBtn.classList.toggle("is-busy", !!busy);
+        els.scanBtn.setAttribute("aria-label", busy ? "Cancel the scan" : "Scan Device ID from a photo");
+        els.scanBtn.setAttribute("title", busy ? "Cancel the scan" : "Scan the Device ID from a photo (OCR)");
       }
       if (els.scanFile) els.scanFile.disabled = !!busy;
     }
@@ -996,15 +1032,20 @@
       });
     }
 
-    // Upscale small photos and stretch contrast so the dark digits on the sticker
-    // read cleanly. Any failure here just means the raw photo is used instead.
-    function ocrEnhance(source) {
+    // Decode, resize, convert to grey and stretch the contrast once per scan; every
+    // pass then reuses this plane, so a six-pass cascade still costs one pass of
+    // pixel work. A photo too small to read is scaled up, a 50-megapixel one scaled
+    // down, because feeding whole camera frames makes the engine time out.
+    function ocrGrayscale(source) {
       if (typeof document === "undefined" || !document.createElement) return null;
       try {
         const w = source.naturalWidth || source.width;
         const h = source.naturalHeight || source.height;
         if (!w || !h) return null;
-        const scale = Math.min(3, Math.max(1, 1100 / Math.max(w, h)));
+        const long = Math.max(w, h);
+        let scale = 1;
+        if (long > OCR_MAX_EDGE) scale = OCR_MAX_EDGE / long;
+        else if (long < OCR_MIN_EDGE) scale = Math.min(3, OCR_MIN_EDGE / long);
         const cw = Math.max(1, Math.round(w * scale));
         const chh = Math.max(1, Math.round(h * scale));
         const canvas = document.createElement("canvas");
@@ -1016,14 +1057,17 @@
         const data = ctx.getImageData(0, 0, cw, chh);
         if (!data || !data.data) return null;
         const px = data.data;
+        const count = cw * chh;
+        const gray = new Uint8Array(count);
         const hist = new Array(256);
         for (let i = 0; i < 256; i++) hist[i] = 0;
-        for (let i = 0; i < px.length; i += 4) {
-          const g = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000;
-          hist[Math.max(0, Math.min(255, Math.round(g)))]++;
+        for (let i = 0, p = 0; i < px.length; i += 4, p++) {
+          const g = Math.max(0, Math.min(255, Math.round(
+            (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000)));
+          gray[p] = g;
+          hist[g]++;
         }
-        const total = cw * chh;
-        const cut = total * 0.02;
+        const cut = count * 0.02;
         let lo = 0;
         let hi = 255;
         let run = 0;
@@ -1031,69 +1075,320 @@
         run = 0;
         for (let v = 255; v >= 0; v--) { run += hist[v]; if (run > cut) { hi = v; break; } }
         const span = Math.max(1, hi - lo);
-        for (let i = 0; i < px.length; i += 4) {
-          const g = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000;
-          const v = Math.max(0, Math.min(255, Math.round(((g - lo) / span) * 255)));
-          px[i] = v; px[i + 1] = v; px[i + 2] = v;
+        for (let p = 0; p < count; p++) {
+          gray[p] = Math.max(0, Math.min(255, Math.round(((gray[p] - lo) / span) * 255)));
         }
-        ctx.putImageData(data, 0, 0);
-        return canvas;
+        return { gray: gray, width: cw, height: chh };
       } catch (e) {
         return null;
       }
     }
 
+    // Otsu's method: the grey level that best splits the pixels into ink and paper.
+    // Stickers are lit unevenly, so one adaptive cut reads better than a fixed
+    // threshold once the contrast stretch has done its work.
+    function ocrOtsu(gray) {
+      const hist = new Array(256);
+      for (let i = 0; i < 256; i++) hist[i] = 0;
+      for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+      const total = gray.length;
+      let sum = 0;
+      for (let i = 0; i < 256; i++) sum += i * hist[i];
+      let sumB = 0;
+      let wB = 0;
+      let best = 0;
+      let thr = 128;
+      for (let i = 0; i < 256; i++) {
+        wB += hist[i];
+        if (wB === 0) continue;
+        const wF = total - wB;
+        if (wF === 0) break;
+        sumB += i * hist[i];
+        const mB = sumB / wB;
+        const mF = (sum - sumB) / wF;
+        const between = wB * wF * (mB - mF) * (mB - mF);
+        if (between > best) { best = between; thr = i; }
+      }
+      return thr;
+    }
+
+    // Turn a grey plane into a canvas, optionally binarised, and turn it the way the
+    // phone was held. A sideways photo is the single most common reason one pass
+    // finds nothing while the same photo rotated finds the ID first time.
+    function ocrPassImage(plane, bin, rot) {
+      if (typeof document === "undefined" || !document.createElement || !plane) return null;
+      try {
+        const w = plane.width;
+        const h = plane.height;
+        if (!w || !h) return null;
+        const gray = plane.gray;
+        const count = w * h;
+        const flat = document.createElement("canvas");
+        flat.width = w;
+        flat.height = h;
+        const fctx = flat.getContext ? flat.getContext("2d") : null;
+        if (!fctx) return null;
+        const img = fctx.createImageData(w, h);
+        if (!img || !img.data) return null;
+        const px = img.data;
+        const thr = bin === "otsu" ? ocrOtsu(gray) : (bin === "fixed" ? OCR_FIXED_CUT : -1);
+        for (let p = 0, i = 0; p < count; p++, i += 4) {
+          const v = thr < 0 ? gray[p] : (gray[p] > thr ? 255 : 0);
+          px[i] = v; px[i + 1] = v; px[i + 2] = v; px[i + 3] = 255;
+        }
+        fctx.putImageData(img, 0, 0);
+        const turn = ((rot || 0) % 360 + 360) % 360;
+        if (!turn) return flat;
+        const out = document.createElement("canvas");
+        out.width = turn === 180 ? w : h;
+        out.height = turn === 180 ? h : w;
+        const octx = out.getContext ? out.getContext("2d") : null;
+        if (!octx) return flat;
+        octx.fillStyle = "#ffffff";
+        octx.fillRect(0, 0, out.width, out.height);
+        octx.translate(out.width / 2, out.height / 2);
+        octx.rotate((turn * Math.PI) / 180);
+        octx.drawImage(flat, -w / 2, -h / 2);
+        return out;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // The engine is created once and kept: a fresh worker per scan would re-read
+    // the language data and re-initialise the WebAssembly core every single time.
+    function loadOcrWorker() {
+      if (ocrWorkerPromise) return ocrWorkerPromise;
+      ocrWorkerPromise = (async () => {
+        const engine = await loadOcrEngine();
+        if (typeof engine.createWorker !== "function") return null;
+        const worker = await engine.createWorker(OCR_LANG, 1, { logger: ocrProgress });
+        if (ocrAborted) {
+          if (typeof worker.terminate === "function") {
+            const done = worker.terminate();
+            if (done && typeof done.catch === "function") done.catch(() => {});
+          }
+          return null;
+        }
+        ocrWorker = worker;
+        return worker;
+      })();
+      ocrWorkerPromise.catch(() => { ocrWorkerPromise = null; });
+      return ocrWorkerPromise;
+    }
+
+    function ocrDropWorker() {
+      const worker = ocrWorker;
+      ocrWorker = null;
+      ocrWorkerPromise = null;
+      if (worker && typeof worker.terminate === "function") {
+        try {
+          const done = worker.terminate();
+          if (done && typeof done.catch === "function") done.catch(() => {});
+        } catch (e) {}
+      }
+    }
+
+    // A barcode on the sticker is already an exact reading, so it is tried first:
+    // built into Android Chrome, offline, and it costs no download.
+    async function ocrFromBarcode(bitmap) {
+      try {
+        if (typeof BarcodeDetector !== "function" || !bitmap) return "";
+        let formats = null;
+        if (typeof BarcodeDetector.getSupportedFormats === "function") {
+          formats = await BarcodeDetector.getSupportedFormats();
+        }
+        if (!formats || !formats.length) return "";
+        const detector = new BarcodeDetector({ formats: formats });
+        const codes = await detector.detect(bitmap);
+        for (const code of codes || []) {
+          const found = ocrExtractDeviceId(String((code && code.rawValue) || ""));
+          if (found.id) return found.id;
+        }
+      } catch (e) {}
+      return "";
+    }
+
+    // Readings that more than one pass agrees on beat a single confident guess,
+    // so votes come first and the extractor score breaks ties.
+    function ocrMerge(passes) {
+      const byId = new Map();
+      for (const pass of passes) {
+        const seenHere = new Set();
+        for (const cand of ocrCandidates(String(pass.text || ""))) {
+          if (seenHere.has(cand.id)) continue;
+          seenHere.add(cand.id);
+          const entry = byId.get(cand.id) || { id: cand.id, score: cand.score, votes: 0 };
+          if (cand.score > entry.score) entry.score = cand.score;
+          entry.votes++;
+          byId.set(cand.id, entry);
+        }
+      }
+      const list = Array.from(byId.values());
+      list.sort((a, b) => (b.votes - a.votes) || (b.score - a.score) || (a.id < b.id ? -1 : 1));
+      return {
+        list: list,
+        id: list.length ? list[0].id : "",
+        score: list.length ? list[0].score : 0,
+        others: list.slice(1, 4).map((c) => c.id),
+      };
+    }
+
+    // Stop as soon as the answer is solid: two passes agreeing is proof enough, and
+    // one clean, unrivaled reading is taken on its own so a clear shot does not cost
+    // the officer six passes of waiting.
+    function ocrSettled(merged, done) {
+      if (!merged.list.length) return false;
+      const top = merged.list[0];
+      if (top.votes >= 2) return true;
+      if (top.score < 60) return false;
+      const second = merged.list[1];
+      return !second || second.score + 20 < top.score;
+    }
+
     function ocrProgress(msg) {
+      if (ocrAborted) return;
       if (msg && msg.status) {
         const pct = Math.round((msg.progress || 0) * 100);
-        ocrScanMsg("Reading the photo… " + msg.status + (msg.progress ? " " + pct + "%" : ""), "busy");
+        const where = ocrPassNote ? " (" + ocrPassNote + ")" : "";
+        ocrScanMsg("Reading the photo" + where + "… " + msg.status + (msg.progress ? " " + pct + "%" : ""), "busy");
       }
+    }
+
+    // Terminating the engine abandons the job it is running and its promise never
+    // settles, so every long wait is raced against the cancel tap. Without this the
+    // officer taps cancel and the box stays stuck on "Cancelling…" for good.
+    function ocrInterruptible(promise) {
+      const guard = new Promise((resolve, reject) => {
+        ocrCancelReject = reject;
+      });
+      return Promise.race([promise, guard]).then(
+        (value) => { ocrCancelReject = null; return value; },
+        (err) => { ocrCancelReject = null; throw err; }
+      );
     }
 
     async function ocrRecognize(file) {
       const engine = await loadOcrEngine();
-      let source = file;
+      const worker = await ocrInterruptible(loadOcrWorker());
+      let bitmap = null;
       try {
-        const bitmap = await ocrLoadBitmap(file);
-        const enhanced = ocrEnhance(bitmap);
-        if (enhanced) source = enhanced;
+        bitmap = await ocrLoadBitmap(file);
       } catch (e) {}
-      const result = await engine.recognize(source, OCR_LANG, { logger: ocrProgress });
-      const data = (result && result.data) || {};
-      const text = String(data.text || "");
-      const confidence = typeof data.confidence === "number" ? data.confidence : null;
-      return { text: text, confidence: confidence, found: ocrExtractDeviceId(text) };
+
+      const fromBarcode = await ocrFromBarcode(bitmap);
+      if (fromBarcode) {
+        return { id: fromBarcode, others: [], score: 100, confidence: 100, source: "barcode" };
+      }
+
+      const plane = bitmap ? ocrGrayscale(bitmap) : null;
+      if (!plane) {
+        const result = await engine.recognize(file, OCR_LANG, { logger: ocrProgress });
+        const data = (result && result.data) || {};
+        const text = String(data.text || "");
+        const foundOne = ocrMerge([{ text: text }]);
+        return {
+          id: foundOne.id,
+          others: foundOne.others,
+          score: foundOne.score,
+          confidence: typeof data.confidence === "number" ? data.confidence : null,
+          source: "photo",
+        };
+      }
+
+      const passes = [];
+      let confidence = null;
+      let agreed = null;
+      for (let i = 0; i < OCR_PASSES.length; i++) {
+        if (ocrAborted) break;
+        const pass = OCR_PASSES[i];
+        ocrPassNote = pass.note;
+        const image = ocrPassImage(plane, pass.bin, pass.rot);
+        if (!image) continue;
+        let text = "";
+        if (worker) {
+          await worker.setParameters({
+            tessedit_pageseg_mode: String(OCR_PSM),
+            user_defined_dpi: "300",
+          });
+          const result = await ocrInterruptible(worker.recognize(image));
+          const data = (result && result.data) || {};
+          text = String(data.text || "");
+          if (typeof data.confidence === "number") {
+            confidence = confidence === null ? data.confidence : Math.max(confidence, data.confidence);
+          }
+        } else {
+          const result = await engine.recognize(image, OCR_LANG, { logger: ocrProgress });
+          const data = (result && result.data) || {};
+          text = String(data.text || "");
+          if (typeof data.confidence === "number") confidence = data.confidence;
+        }
+        passes.push({ text: text });
+        const merged = ocrMerge(passes);
+        if (ocrAborted) break;
+        if (ocrSettled(merged, i + 1)) { agreed = merged; break; }
+      }
+      ocrPassNote = "";
+      const found = agreed || ocrMerge(passes);
+      return { id: found.id, others: found.others, score: found.score, confidence: confidence, source: "photo" };
     }
 
     async function ocrScanFile(file) {
       if (!file) return;
+      if (ocrAborted) return;
       if (els.deviceId.value.trim()) {
         flash("The Device ID box already has a value — the scan will replace it.", true);
       }
+      ocrAborted = false;
       ocrSetBusy(true);
       ocrScanMsg("Loading the scanner…", "busy");
       try {
         const out = await ocrRecognize(file);
-        if (!out.found.id) {
+        if (ocrAborted) {
+          ocrScanMsg("Scan cancelled.", "info");
+          return;
+        }
+        if (!out.id) {
           ocrScanMsg("No Device ID found in that photo — fill the box by hand, or retake the shot closer to the 245-239 part.", "error");
           els.deviceId.focus();
           return;
         }
-        els.deviceId.value = out.found.id;
-        let msg = "Scanned " + out.found.id + " — check it against the sticker, then save.";
-        if (out.found.others.length) {
-          msg = "Scanned " + out.found.id + " (other readings: " + out.found.others.join(", ") + ") — check the digits against the sticker, then save.";
-        } else if (out.confidence !== null && out.confidence < 60) {
-          msg = "Low-confidence scan: " + out.found.id + " — check every digit against the sticker, then save.";
+        els.deviceId.value = out.id;
+        const unsure = out.others.length || (out.score !== undefined && out.score < 70);
+        let msg = out.source === "barcode"
+          ? "Read " + out.id + " from the barcode — check it against the sticker, then save."
+          : "Scanned " + out.id + " — check it against the sticker, then save.";
+        if (out.others.length) {
+          msg = "Scanned " + out.id + " (other readings: " + out.others.join(", ") + ") — check the digits against the sticker, then save.";
+        } else if (out.source !== "barcode" && out.score !== undefined && out.score < 70) {
+          msg = "Low-confidence scan: " + out.id + " — check every digit against the sticker, then save.";
         }
-        ocrScanMsg(msg, out.found.others.length || (out.confidence !== null && out.confidence < 60) ? "warn" : "ok");
+        ocrScanMsg(msg, unsure ? "warn" : "ok");
         els.deviceId.focus();
       } catch (e) {
-        ocrScanMsg("The scanner could not start (it needs internet the first time it is used). Type the Device ID instead.", "error");
+        if (ocrAborted) {
+          ocrScanMsg("Scan cancelled.", "info");
+        } else {
+          ocrScanMsg("The scanner could not start (it needs internet the first time it is used). Type the Device ID instead.", "error");
+        }
       } finally {
         ocrSetBusy(false);
+        ocrPassNote = "";
         if (els.scanFile) els.scanFile.value = "";
       }
+    }
+
+    function ocrCancel() {
+      if (!ocrBusy) return;
+      ocrAborted = true;
+      ocrPassNote = "";
+      ocrScanMsg("Cancelling…", "busy");
+      const reject = ocrCancelReject;
+      ocrCancelReject = null;
+      if (reject) {
+        try { reject(new Error("cancelled")); } catch (e) {}
+      }
+      ocrDropWorker();
     }
 
     function ocrHandleScanInput(e) {
@@ -1516,7 +1811,10 @@
         const masked = maskDeviceId(els.deviceId.value);
         if (els.deviceId.value !== masked) els.deviceId.value = masked;
       });
-      els.scanBtn.addEventListener("click", () => els.scanFile.click());
+      els.scanBtn.addEventListener("click", () => {
+        if (ocrBusy) ocrCancel();
+        else els.scanFile.click();
+      });
       els.scanFile.addEventListener("change", ocrHandleScanInput);
       els.inventoryBody.addEventListener("input", (e) => {
         const input = e.target && e.target.closest ? e.target.closest('[data-edit-field="deviceId"]') : null;

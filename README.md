@@ -53,8 +53,17 @@ returns and fills that in.
   `Save Device to Sheet`. The scanned value goes through exactly the same `101-701` validation as a
   typed one, so a scan can never put an invalid ID on the sheet.
 - If the photo is unclear the box is left empty with a short message rather than a guess. When several
-  readings are possible, or the OCR was low-confidence, the extra candidates are listed next to the box
-  so the right digits can be chosen by eye.
+  readings are possible, the extra candidates are listed next to the box so the right digits can be
+  chosen by eye.
+- A photo is not read in one go. It is cleaned up and re-read up to seven times — cut three different
+  ways and turned upright, 90°, 180° and 270° — because a single pass fails on its own for a sideways
+  phone, a dark shell, glare or small print. The reading that several passes agree on wins, and the
+  cascade stops as soon as one clean reading comes back, so a good photo costs a second or two. Tap the
+  button again while it runs to cancel.
+- A barcode on the sticker is read first, where the phone supports it: that answer is exact, needs no
+  download and works with no internet at all.
+- Photos are resized to at most 3400 px on the long side before reading, so a 50-megapixel camera does
+  not stall the engine.
 - Recognition runs entirely in the browser; **the photo is never uploaded** anywhere.
 - `tesseract.js` is fetched from jsDelivr on the **first scan only** (~8 MB of engine + language data,
   then cached by the browser). The first scan therefore needs internet, even on a LAN install. To go
@@ -62,6 +71,8 @@ returns and fills that in.
 - Reads `245-239`, `245239`, `245 239`, a misread hyphen such as `245~239`, and common glyph confusions
   (`O`→`0`, `S`→`5`, `A`→`4`, `Z`→`2`, …). Digit-shaped letters and dates (`2024-05-12`) are not
   reported as Device IDs.
+- `tests/fixtures/` holds the simulated phone photos the pipeline is measured against — small print,
+  sideways, upside down, dark, low-contrast, tilted, tiny, 8000×6000, and one with no Device ID in it.
 
 Each saved inventory row has an `Edit` action. Edit the Device ID, battery result and hours, component
 checkboxes, SIM type, or remarks, then use `Save`; `Cancel` leaves the row unchanged. The same Device ID

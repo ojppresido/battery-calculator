@@ -309,6 +309,7 @@ input:focus::placeholder { color: #c3c9d4; }
 .scan-msg-ok { color: var(--green-700); }
 .scan-msg-warn { color: var(--orange-800); }
 .scan-msg-error { color: var(--red-700); }
+.scan-msg-info { color: var(--gray-600); }
 
 select.field {
   appearance: none; -webkit-appearance: none;

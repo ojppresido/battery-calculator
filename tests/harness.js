@@ -31,6 +31,7 @@ function makeEl(id) {
     click() { this._fire("click", {}); },
     appendChild() {},
     getAttribute() { return null; },
+    setAttribute(name, value) { this["attr_" + name] = String(value); },
     addEventListener(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); },
     _fire(ev, e) {
       const evs = listeners[ev] || [];
@@ -257,6 +258,64 @@ const ocrDriver = `
     var dupes = ocrExtractDeviceId("245-239 245-239");
     t("repeated id reported once", dupes.id === "245-239" && dupes.others.length === 0, JSON.stringify(dupes));
 
+    /* merge: the reading several passes agree on wins over one louder guess */
+    var agree = ocrMerge([{ text: "245-239" }, { text: "245-239" }, { text: "245-231 or 245-239" }]);
+    t("agreeing passes win", agree.id === "245-239" && agree.list[0].votes === 3, JSON.stringify(agree.list));
+    var split = ocrMerge([{ text: "245-239" }, { text: "245-231" }]);
+    t("a tie falls back to the better score", !!split.id, JSON.stringify(split.list));
+    t("no readings at all", ocrMerge([{ text: "SAMSUNG" }, { text: "" }]).id === "");
+
+    /* settle rule: stop early on one clean read, keep going when it is weak */
+    var one = [{ id: "245-239", score: 100, votes: 1 }];
+    t("a clean single read settles immediately", ocrSettled({ list: one }, 1) === true);
+    var weak = [{ id: "245-239", score: 45, votes: 1 }];
+    t("a weak read does not settle", ocrSettled({ list: weak }, 1) === false);
+    t("two agreeing passes settle", ocrSettled({ list: [{ id: "245-239", score: 45, votes: 2 }] }, 2) === true);
+    var rivals = [{ id: "245-239", score: 80, votes: 1 }, { id: "245-231", score: 75, votes: 1 }];
+    t("a close rival does not settle", ocrSettled({ list: rivals }, 2) === false);
+    t("nothing read never settles", ocrSettled({ list: [] }, 5) === false);
+
+    /* Otsu must split a bimodal image at the ink, not in the middle of the paper */
+    var half = new Uint8Array(100);
+    for (var i = 0; i < 50; i++) half[i] = 20;
+    for (var j = 50; j < 100; j++) half[j] = 230;
+    t("otsu puts the ink on the black side of the cut", ocrOtsu(half) >= 20 && ocrOtsu(half) < 230, String(ocrOtsu(half)));
+    t("otsu survives a flat image", typeof ocrOtsu(new Uint8Array(100)) === "number");
+
+    /* the pass plan: cheap-and-likely first, and every rotation is covered */
+    t("first pass needs no rotation", OCR_PASSES[0].rot === 0 && OCR_PASSES[0].bin === "otsu");
+    var rots = {};
+    for (var q = 0; q < OCR_PASSES.length; q++) rots[OCR_PASSES[q].rot] = true;
+    t("upright and both sideways are all tried", rots[0] && rots[90] && rots[180] && rots[270], JSON.stringify(Object.keys(rots)));
+    var bins = {};
+    for (var q2 = 0; q2 < OCR_PASSES.length; q2++) bins[OCR_PASSES[q2].bin] = true;
+    t("more than one way of cleaning the image is tried", bins.otsu && bins.fixed && bins.none, JSON.stringify(Object.keys(bins)));
+    t("a clean photo is never scaled past the pixel count it has", OCR_MAX_EDGE >= 2000 && OCR_MIN_EDGE < OCR_MAX_EDGE);
+
+    /* a barcode is already an exact reading, so it is tried before the slow path */
+    var barcodeTests = (function () {
+      var seenFormats = null;
+      globalThis.BarcodeDetector = function (opts) { seenFormats = opts.formats; this.detect = function () { return Promise.resolve([{ rawValue: "INEC/ZT/808-432" }]); }; };
+      globalThis.BarcodeDetector.getSupportedFormats = function () { return Promise.resolve(["code_128", "qr_code"]); };
+      var bitmapStub = { naturalWidth: 10, naturalHeight: 10 };
+      return ocrFromBarcode(bitmapStub).then(function (fromBarcode) {
+        t("device id read straight from a barcode", fromBarcode === "808-432", fromBarcode);
+        t("barcode detector asked for the formats the phone supports", !!seenFormats && seenFormats.length === 2, JSON.stringify(seenFormats));
+        globalThis.BarcodeDetector = function () { this.detect = function () { return Promise.resolve([{ rawValue: "ASSET-99120" }]); }; };
+        globalThis.BarcodeDetector.getSupportedFormats = function () { return Promise.resolve(["code_128"]); };
+        return ocrFromBarcode(bitmapStub);
+      }).then(function (fromBarcode) {
+        t("a barcode with no device id in it is ignored", fromBarcode === "", fromBarcode);
+        delete globalThis.BarcodeDetector;
+        return ocrFromBarcode(bitmapStub);
+      }).then(function (afterRemoval) {
+        t("a phone with no BarcodeDetector is handled", afterRemoval === "", afterRemoval);
+        return ocrFromBarcode(null);
+      }).then(function (withNothing) {
+        t("no bitmap to scan is handled", withNothing === "", withNothing);
+      });
+    })();
+
     var idEl = document.getElementById("deviceId");
     var msg = function () { return document.getElementById("scanMsg").textContent; };
 
@@ -265,7 +324,9 @@ const ocrDriver = `
       recognize: function () { return Promise.resolve({ data: { text: "INEC/ZT/245-239", confidence: 88 } }); }
     };
     idEl.value = "";
-    return ocrScanFile({ name: "sticker.jpg" }).then(function () {
+    return barcodeTests.then(function () {
+      return ocrScanFile({ name: "sticker.jpg" });
+    }).then(function () {
       t("scan fills the device id", idEl.value === "245-239", JSON.stringify(idEl.value));
       t("scan reports the reading", msg().indexOf("245-239") !== -1, msg());
       t("scan re-enables the button", document.getElementById("scanBtn").disabled === false);
@@ -278,13 +339,22 @@ const ocrDriver = `
       t("unreadable scan leaves the box empty", idEl.value === "");
       t("unreadable scan explains what to do", msg().indexOf("No Device ID found") !== -1, msg());
 
-      /* low confidence -> still filled, but flagged for checking */
+      /* a clean, unambiguous read is not flagged even when Tesseract's own
+         confidence is low, because a sticker photo is mostly background */
       window.Tesseract.recognize = function () { return Promise.resolve({ data: { text: "245-239", confidence: 25 } }); };
       idEl.value = "";
       return ocrScanFile({ name: "faint.jpg" });
     }).then(function () {
-      t("low-confidence scan still fills the box", idEl.value === "245-239", JSON.stringify(idEl.value));
-      t("low-confidence scan asks for a check", msg().indexOf("Low-confidence") !== -1, msg());
+      t("clean scan still fills the box", idEl.value === "245-239", JSON.stringify(idEl.value));
+      t("clean scan is not flagged as unsure", msg().indexOf("other readings") === -1 && msg().indexOf("Low-confidence") === -1, msg());
+
+      /* two different readings -> filled, but the rival is shown for checking */
+      window.Tesseract.recognize = function () { return Promise.resolve({ data: { text: "245-239 or 245-231", confidence: 70 } }); };
+      idEl.value = "";
+      return ocrScanFile({ name: "two.jpg" });
+    }).then(function () {
+      t("ambiguous scan fills the box", idEl.value === "245-239", JSON.stringify(idEl.value));
+      t("ambiguous scan lists the other reading", msg().indexOf("other readings: 245-231") !== -1, msg());
 
       /* engine unavailable (no internet on the LAN) -> no crash, manual entry still works */
       window.Tesseract = undefined;
