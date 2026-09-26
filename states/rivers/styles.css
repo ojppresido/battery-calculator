@@ -685,6 +685,45 @@ footer > div { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
   .check-item { min-height: 4.5rem; }
 }
 
+/* ---------- choosing the part of the photo to read ----------
+   A drag box over the preview. Kept to its own classes so nothing here
+   leans on the utility set, and so the print rules above can ignore it. */
+.crop-wrap { display: flex; align-items: center; justify-content: center; padding: 1rem; background: rgba(15, 35, 84, .82); }
+.crop-wrap.hidden { display: none; }
+.crop-card {
+  width: 100%; max-width: 30rem; max-height: 100%; overflow-y: auto;
+  background: #fff; border-radius: 1rem; padding: 1rem;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, .35);
+}
+.crop-title { margin: 0 0 .25rem; font-size: 1rem; font-weight: 700; color: #0f2354; }
+.crop-hint { margin: 0 0 .625rem; font-size: .75rem; color: #6b7280; }
+.crop-stage {
+  position: relative; display: inline-block; max-width: 100%;
+  background: #111827; border-radius: .5rem; overflow: hidden;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.crop-img { display: block; max-width: 100%; max-height: 58vh; }
+.crop-box {
+  position: absolute; border: 2px solid #fff; border-radius: .25rem;
+  box-shadow: 0 0 0 9999px rgba(15, 35, 84, .55);
+  cursor: move; touch-action: none;
+}
+.crop-grip {
+  position: absolute; right: -9px; bottom: -9px; width: 22px; height: 22px;
+  border: 2px solid #fff; border-radius: 50%; background: #0f2354; cursor: nwse-resize;
+}
+.crop-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+.crop-btn {
+  flex: 1 1 8rem; padding: .625rem .75rem; font-size: .875rem; font-weight: 700;
+  color: #0f2354; background: #eef2ff; border: 1px solid #c7d2fe;
+  border-radius: .5rem; cursor: pointer;
+}
+.crop-btn-primary { color: #fff; background: #1d4ed8; border-color: #1d4ed8; }
+.crop-btn-plain { flex: 0 1 6rem; color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
+.crop-btn:disabled { opacity: .6; cursor: progress; }
+.crop-privacy { margin: .625rem 0 0; font-size: .6875rem; color: #6b7280; }
+@media print { .crop-wrap { display: none !important; } }
+
 @media print {
   @page { size: A4 landscape; margin: 8mm; }
   html, body { background: #fff !important; }

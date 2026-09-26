@@ -30,7 +30,9 @@ last path segment, so `…/states/ogun/` and `…/ogun/` both work.
 | `styles.css` | Styling; linked cache-busted (`styles.css?v=6`). |
 | `build_states.js` | Regenerates one page under `states/<state>/` (copy of `index.html` + `styles.css`) per state so path URLs resolve on static hosts. Also prunes state dirs no longer in `STATES`. |
 | `states/<state>/` (e.g. `states/ogun/`, `states/ondo/`) | Generated per-state landing pages. Do not hand-edit. |
-| `tests/` | Offline logic harnesses (no network needed): `harness.js` (full worksheet + Device ID OCR extraction), `db_harness.js` (ogun + mock Supabase), `path_harness.js` (URL-shape matrix incl. root/calc-only and ignored `?state=`). |
+| `models/` | The committed OCR language model, `eng.traineddata.gz` (2.9 MB), served from the site's own origin so the first scan is not waiting on a third party. |
+| `supabase/functions/bvas-read-device-id/` | Edge Function that reads a cropped sticker with a vision model. `index.js` talks to the model; `extract.mjs` holds the NNN-NNN rules and is unit-tested. Pasting these into the dashboard is the whole deploy. |
+| `tests/` | Offline logic harnesses (no network needed): `harness.js` (full worksheet + Device ID OCR extraction + crop box + server answer handling), `db_harness.js` (ogun + mock Supabase), `path_harness.js` (URL-shape matrix incl. root/calc-only and ignored `?state=`), `server_ocr.test.js` (the reading rules). |
 | `scripts/export_data.js` | Pulls every `bvas_devices_*` table into one JSON backup (read-only; uses the public anon key). |
 | `supabase/migrations/` | `0001` (all per-state tables + initial RLS), `0002` (added real `ONDO`, dropped placeholders), `0003` (private-session RLS, `row_id`, and editable-row support). |
 
@@ -66,7 +68,16 @@ returns and fills that in.
   not stall the engine.
 - Where the phone's own `TextDetector` exists, it is tried first — no download, no engine. It is behind
   a browser flag on Android, so most phones will not have it and fall through to the engine.
-- Recognition runs entirely in the browser; **the photo is never uploaded** anywhere.
+- Choosing a photo now opens a crop step: drag the box over the six digits (tap the photo to place the
+  box, drag the dot to resize it, or take the whole frame) and then choose who reads it.
+- **Two ways to read it.** "Read on this phone" runs the engine above and **never sends the photo
+  anywhere**. "Read the ID" sends only the cropped sticker to the office server (see below). If the
+  server cannot read it — no signal, function asleep, nothing legible — the app says so and reads the
+  photo on the phone instead, so the two paths are a choice and a fallback, not a dependency.
+- **The server path changes the privacy position, so it is opt-in per scan and stated in the dialog.**
+  The crop is held in the server's memory for the length of one request and is never written to disk or
+  into any table; only the six digits come back. Set `SERVER_OCR.on = false` in `index.html` to remove
+  the server option entirely and keep every photo on the device.
 - The language model ships with the app: `models/eng.traineddata.gz` (2.9 MB), fetched from this site's
   own origin. Tesseract's own default model is 10.9 MB served by `tessdata.projectnaptha.com`, measured
   here at 70 KB/s — over two and a half minutes, and it timed out before finishing; the committed model
@@ -88,6 +99,44 @@ checkboxes, SIM type, or remarks, then use `Save`; `Cancel` leaves the row uncha
 format and required SIM Type apply to inline edits. Battery re-test and
 remove actions remain available. `Clear All` clears only the current browser session's local worksheet and
 does not delete Supabase rows.
+
+## Reading the sticker on the server
+
+The on-device engine reads most stickers. A photo with glare, a shadow across the label or a faded
+print is past it, and nothing more can be done about that on the phone alone. For those, the cropped
+sticker can be read by a vision model running in a Supabase Edge Function.
+
+Nothing is stored: the crop is read into memory, sent to the model, and dropped. Only the Device ID
+comes back, and only if it is in the exact `NNN-NNN` form.
+
+### Deploy it
+
+1. Copy `supabase/functions/bvas-read-device-id/index.js` and `extract.mjs` from this repo.
+2. Supabase Dashboard -> **Edge Functions** -> **New function** -> name it `bvas-read-device-id` ->
+   paste `index.js` -> **Deploy**. Then use **Add new file** to add `extract.mjs` with exactly that
+   name, in the same folder. Both files are needed: `index.js` does the talking to the model and
+   `extract.mjs` holds the rules for what counts as a Device ID.
+3. In the function's **Secrets** tab add `ANTHROPIC_API_KEY` with your key. That is the only secret.
+4. Optional: add `BVAS_VISION_MODEL` = `claude-haiku-4-5` for a faster, cheaper read. The default is
+   `claude-sonnet-5`, which is the more careful reader.
+5. Optional: raise the function's limits in the dashboard (CPU time, memory) if reads are being cut off.
+
+The app needs no change to call it: it posts to `/functions/v1/bvas-read-device-id` on the project URL
+already in `index.html`, with the anon key it already holds. Until the function is deployed, the "Read
+the ID" button reports a server error and the app falls back to reading on the phone.
+
+### What it will not do
+
+Return a number that is not `NNN-NNN`. Dates (`2024-05-12`), phone numbers, and longer serials are all
+rejected rather than sliced into a plausible-looking id, and the rules in `extract.mjs` are covered by
+`node tests/server_ocr.test.js`.
+
+### Worth knowing before handover
+
+The anon key is public in the page, so anyone who opens the app can call this function. Size limits and
+a JPEG-only check are in place, but they are not a security boundary — for real protection, put the
+function behind something that can tell a real officer from a script. A vision call costs a fraction
+of a cent; a script looping over it would not be free.
 
 ## Development workflow
 

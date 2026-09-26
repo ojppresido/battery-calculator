@@ -6,7 +6,7 @@
   <meta name="description" content="Per-state BVAS device health and inventory worksheet for the ICT Department." />
   <title>BVAS Device Health &amp; Inventory Worksheet | ICT Department</title>
   <meta name="theme-color" content="#0f2354" />
-  <link rel="stylesheet" href="styles.css?v=6" />
+  <link rel="stylesheet" href="styles.css?v=7" />
 </head>
 <body class="min-h-screen bg-gray-100 text-gray-800 flex flex-col">
 
@@ -96,6 +96,29 @@
           </div>
           <input type="file" id="scanFile" accept="image/*" capture="environment" class="hidden" />
           <p id="scanMsg" class="scan-msg" role="status" aria-live="polite"></p>
+        </div>
+
+        <!-- Choosing the part of the photo to read. The officer drags the box over
+             the Device ID, so what is sent is the sticker and not the whole scene. -->
+        <div id="cropWrap" class="crop-wrap fixed inset-0 z-50 hidden" role="dialog"
+             aria-modal="true" aria-labelledby="cropTitle">
+          <div class="crop-card">
+            <h2 id="cropTitle" class="crop-title">Drag over the Device ID</h2>
+            <p class="crop-hint" id="cropHint">Drag the box to cover the six digits, or the whole
+              sticker. Only what is inside the box is sent.</p>
+            <div id="cropStage" class="crop-stage">
+              <img id="cropImg" class="crop-img" alt="The photo you chose" />
+              <div id="cropBox" class="crop-box"><span class="crop-grip" aria-hidden="true"></span></div>
+            </div>
+            <div class="crop-actions">
+              <button type="button" id="cropSend" class="crop-btn crop-btn-primary">Read the ID</button>
+              <button type="button" id="cropLocal" class="crop-btn">Read on this phone</button>
+              <button type="button" id="cropWhole" class="crop-btn crop-btn-plain">Whole photo</button>
+              <button type="button" id="cropCancel" class="crop-btn crop-btn-plain">Cancel</button>
+            </div>
+            <p class="crop-privacy" id="cropPrivacy">The cropped sticker is sent to the office
+              server to be read, and is not kept. “Read on this phone” keeps the photo here.</p>
+          </div>
         </div>
         <label class="block">
           <span class="block text-sm font-medium text-gray-700 mb-1">SIM Type</span>
@@ -322,6 +345,25 @@
     // The first scan has to pull that model down. Bounded, so a connection too slow
     // to finish says so instead of sitting on "loading" for ever.
     const OCR_LOAD_TIMEOUT = 90000;
+
+    /* ---------- reading the sticker on the office server ----------
+       The on-device engine above reads most stickers, but a photo with glare, a
+       shadow across the label or a faded print is past what it can do, and no
+       amount of extra work on the phone changes that. So the officer can send
+       just the cropped sticker to a Supabase Edge Function that reads it with a
+       vision model, and only the six digits come back. The crop is held in
+       memory for the length of the request and never written down.
+
+       Set on:false to keep every photo on the phone, which restores the
+       on-device-only behaviour. */
+    const SERVER_OCR = {
+      on: true,
+      fn: "bvas-read-device-id",
+      timeout: 30000,
+      maxEdge: 1000,   /* px, longest edge of the crop that is sent */
+      quality: 0.82
+    };
+
     /* A single pass is not enough for a phone photo of a sticker: small text, a
        sideways phone, glare and a dark shell each defeat it on their own. Each pass
        re-reads the same photo with one thing changed, and the readings that several
@@ -1407,6 +1449,248 @@
       return { id: found.id, others: found.others, score: found.score, confidence: confidence, source: "photo" };
     }
 
+    /* ---------- choosing the part of the photo to read ----------
+       The officer drags a box over the six digits. Sending the sticker rather
+       than the whole frame is what makes the reading good, and it is also the
+       difference between sending a label and sending a room. */
+
+    let cropState = null;
+    let ocrServerCtrl = null;
+
+    function serverOcrAvailable() {
+      return SERVER_OCR.on
+        && !CALC_ONLY
+        && !!SUPABASE_URL
+        && !!SUPABASE_ANON_KEY
+        && typeof fetch === "function";
+    }
+
+    function ocrCropClose() {
+      const wrap = $("cropWrap");
+      if (wrap) wrap.classList.add("hidden");
+      const state = cropState;
+      cropState = null;
+      if (state && state.url) {
+        try { URL.revokeObjectURL(state.url); } catch (e) {}
+      }
+      if (els.scanFile) els.scanFile.value = "";
+    }
+
+    function ocrCropPaint() {
+      const box = $("cropBox");
+      if (!box || !cropState) return;
+      const r = cropState.rect;
+      box.style.left = r.x + "px";
+      box.style.top = r.y + "px";
+      box.style.width = r.w + "px";
+      box.style.height = r.h + "px";
+    }
+
+    function ocrCropClamp() {
+      const s = cropState;
+      if (!s) return;
+      const r = s.rect;
+      r.w = Math.max(24, Math.min(r.w, s.view.w));
+      r.h = Math.max(24, Math.min(r.h, s.view.h));
+      r.x = Math.max(0, Math.min(r.x, s.view.w - r.w));
+      r.y = Math.max(0, Math.min(r.y, s.view.h - r.h));
+    }
+
+    function ocrCropPointerDown(e) {
+      const s = cropState;
+      if (!s) return;
+      const onGrip = e.target && e.target.classList && e.target.classList.contains("crop-grip");
+      const onBox = e.target && e.target.closest && e.target.closest("#cropBox");
+      const rect = s.stage.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      if (onGrip) {
+        s.mode = "resize";
+      } else if (onBox) {
+        s.mode = "move";
+      } else {
+        /* A tap on the photo puts the box under the finger and starts dragging
+           it, so the box can be placed without first dragging it somewhere. */
+        s.mode = "move";
+        s.rect.x = x - s.rect.w / 2;
+        s.rect.y = y - s.rect.h / 2;
+        ocrCropClamp();
+        ocrCropPaint();
+      }
+      s.startX = x;
+      s.startY = y;
+      s.startRect = { x: s.rect.x, y: s.rect.y, w: s.rect.w, h: s.rect.h };
+      e.preventDefault();
+    }
+
+    function ocrCropPointerMove(e) {
+      const s = cropState;
+      if (!s || !s.mode) return;
+      const rect = s.stage.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      if (s.mode === "move") {
+        s.rect.x = s.startRect.x + (x - s.startX);
+        s.rect.y = s.startRect.y + (y - s.startY);
+      } else {
+        s.rect.w = s.startRect.w + (x - s.startX);
+        s.rect.h = s.startRect.h + (y - s.startY);
+      }
+      ocrCropClamp();
+      ocrCropPaint();
+      e.preventDefault();
+    }
+
+    function ocrCropPointerUp() {
+      if (cropState) cropState.mode = null;
+    }
+
+    function ocrCropReset() {
+      const s = cropState;
+      if (!s) return;
+      s.rect = { x: 0, y: 0, w: s.view.w, h: s.view.h };
+      ocrCropPaint();
+    }
+
+    function ocrCropOpen(file) {
+      const wrap = $("cropWrap");
+      const img = $("cropImg");
+      const stage = $("cropStage");
+      if (!wrap || !img || !stage) {
+        ocrScanFile(file);
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      cropState = { url, img, stage, file, view: { w: 0, h: 0 }, rect: { x: 0, y: 0, w: 0, h: 0 }, mode: null };
+      img.onload = () => {
+        const s = cropState;
+        if (!s || s.img !== img) return;
+        const w = img.clientWidth || img.naturalWidth;
+        const h = img.clientHeight || img.naturalHeight;
+        s.view = { w, h };
+        /* Wide and short to begin with: a Device ID is a long thin number, and
+           starting on most of the frame means most photos need no adjustment. */
+        const bw = Math.round(w * 0.88);
+        const bh = Math.max(24, Math.round(h * 0.3));
+        s.rect = { x: Math.round((w - bw) / 2), y: Math.round((h - bh) / 2), w: bw, h: bh };
+        ocrCropPaint();
+      };
+      img.src = url;
+      wrap.classList.remove("hidden");
+      const send = $("cropSend");
+      if (send) send.focus();
+    }
+
+    /* The selected box, as a JPEG small enough to send quickly. */
+    function ocrCropToJpeg() {
+      const s = cropState;
+      if (!s || !s.img || !s.img.naturalWidth || !s.view.w) return null;
+      const natW = s.img.naturalWidth;
+      const natH = s.img.naturalHeight;
+      const kx = natW / s.view.w;
+      const ky = natH / s.view.h;
+      let sx = s.rect.x * kx;
+      let sy = s.rect.y * ky;
+      let sw = s.rect.w * kx;
+      let sh = s.rect.h * ky;
+      sx = Math.max(0, Math.min(sx, natW - 1));
+      sy = Math.max(0, Math.min(sy, natH - 1));
+      sw = Math.max(1, Math.min(sw, natW - sx));
+      sh = Math.max(1, Math.min(sh, natH - sy));
+      const longest = Math.max(sw, sh);
+      const scale = longest > SERVER_OCR.maxEdge ? SERVER_OCR.maxEdge / longest : 1;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(sw * scale));
+      canvas.height = Math.max(1, Math.round(sh * scale));
+      const ctx = canvas.getContext && canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(s.img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      try {
+        return canvas.toDataURL("image/jpeg", SERVER_OCR.quality);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function ocrReadOnServer(dataUrl) {
+      const url = SUPABASE_URL + "/functions/v1/" + SERVER_OCR.fn;
+      const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+      ocrServerCtrl = ctrl;
+      const timer = setTimeout(() => { if (ctrl) ctrl.abort(); }, SERVER_OCR.timeout);
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+            "X-BVAS-Session": SESSION_ID,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ image: dataUrl, state: LOCKED_STATE || "" }),
+          signal: ctrl ? ctrl.signal : undefined
+        });
+        const text = await res.text();
+        if (!res.ok) {
+          let detail = "";
+          try { detail = JSON.parse(text).error || ""; } catch (e) { detail = text.slice(0, 120); }
+          throw new Error("server said " + res.status + (detail ? ": " + detail : ""));
+        }
+        let body = null;
+        try { body = JSON.parse(text); } catch (e) { throw new Error("the server sent something unreadable"); }
+        const id = body && typeof body.device_id === "string" ? body.device_id.trim() : "";
+        /* The shape is checked here as well as on the server, so a wrong answer
+           can never reach the Device ID box. */
+        if (id && !/^[0-9]{3}-[0-9]{3}$/.test(id)) throw new Error("the server sent an id in the wrong shape");
+        return { id, raw: String((body && body.raw_text) || ""), confidence: String((body && body.confidence) || "") };
+      } finally {
+        clearTimeout(timer);
+        ocrServerCtrl = null;
+      }
+    }
+
+    /* Server first, then the phone. Nothing is lost if the server is down, has
+       no signal, or simply cannot see the digits. */
+    async function ocrScanCropped(file, dataUrl) {
+      if (els.deviceId.value.trim()) {
+        flash("The Device ID box already has a value — the scan will replace it.", true);
+      }
+      ocrAborted = false;
+      ocrSetBusy(true);
+      ocrScanMsg("Reading the sticker on the server…", "busy");
+      let needPhone = false;
+      try {
+        const out = await ocrReadOnServer(dataUrl);
+        if (ocrAborted) {
+          ocrScanMsg("Scan cancelled.", "info");
+          return;
+        }
+        if (out.id) {
+          els.deviceId.value = out.id;
+          const weak = out.confidence === "low";
+          ocrScanMsg(
+            "Read " + out.id + " on the server"
+              + (weak ? " (low confidence — check every digit against the sticker" : " — check it against the sticker")
+              + ", then save.",
+            weak ? "warn" : "ok"
+          );
+          els.deviceId.focus();
+          return;
+        }
+        needPhone = true;
+      } catch (e) {
+        if (ocrAborted) {
+          ocrScanMsg("Scan cancelled.", "info");
+          return;
+        }
+        needPhone = true;
+      } finally {
+        ocrSetBusy(false);
+      }
+      if (!needPhone) return;
+      ocrScanMsg("The server could not read that — trying on this phone instead…", "info");
+      await ocrScanFile(file);
+    }
+
     async function ocrScanFile(file) {
       if (!file) return;
       if (ocrAborted) return;
@@ -1462,6 +1746,12 @@
       ocrAborted = true;
       ocrPassNote = "";
       ocrScanMsg("Cancelling…", "busy");
+      /* A read in flight on the server has to be stopped as well, or the
+         answer would arrive after the officer has walked away. */
+      if (ocrServerCtrl) {
+        try { ocrServerCtrl.abort(); } catch (e) {}
+        ocrServerCtrl = null;
+      }
       const reject = ocrCancelReject;
       ocrCancelReject = null;
       if (reject) {
@@ -1473,7 +1763,14 @@
     function ocrHandleScanInput(e) {
       const input = e && e.target ? e.target : els.scanFile;
       const file = input && input.files ? input.files[0] : null;
-      if (file) ocrScanFile(file);
+      if (!file) return;
+      /* With the server available the officer chooses the part of the photo to
+         read; without it the photo goes straight to the on-device engine. */
+      if (serverOcrAvailable()) {
+        ocrCropOpen(file);
+        return;
+      }
+      ocrScanFile(file);
     }
 
     function requireSimType(value) {
@@ -1895,6 +2192,47 @@
         else els.scanFile.click();
       });
       els.scanFile.addEventListener("change", ocrHandleScanInput);
+      {
+        /* crop dialog: drag to place and size the box, then choose who reads it */
+        const stage = $("cropStage");
+        if (stage) {
+          stage.addEventListener("pointerdown", ocrCropPointerDown);
+          stage.addEventListener("pointermove", ocrCropPointerMove);
+          stage.addEventListener("pointerup", ocrCropPointerUp);
+          stage.addEventListener("pointercancel", ocrCropPointerUp);
+          stage.addEventListener("pointerleave", ocrCropPointerUp);
+        }
+        const whole = $("cropWhole");
+        if (whole) whole.addEventListener("click", ocrCropReset);
+        const cancel = $("cropCancel");
+        if (cancel) cancel.addEventListener("click", () => {
+          const file = cropState && cropState.file ? cropState.file : null;
+          ocrCropClose();
+          if (file) ocrScanFile(file);
+        });
+        const local = $("cropLocal");
+        if (local) local.addEventListener("click", () => {
+          const file = cropState && cropState.file ? cropState.file : null;
+          ocrCropClose();
+          if (file) ocrScanFile(file);
+        });
+        const send = $("cropSend");
+        if (send) send.addEventListener("click", async () => {
+          const file = cropState && cropState.file ? cropState.file : null;
+          const shot = ocrCropToJpeg();
+          if (!file) { ocrCropClose(); return; }
+          if (!shot) {
+            ocrCropClose();
+            ocrScanFile(file);
+            return;
+          }
+          const buttons = [$("cropSend"), $("cropLocal"), $("cropWhole"), $("cropCancel")];
+          buttons.forEach((b) => { if (b) b.disabled = true; });
+          ocrCropClose();
+          await ocrScanCropped(file, shot);
+          buttons.forEach((b) => { if (b) b.disabled = false; });
+        });
+      }
       els.inventoryBody.addEventListener("input", (e) => {
         const input = e.target && e.target.closest ? e.target.closest('[data-edit-field="deviceId"]') : null;
         if (!input) return;

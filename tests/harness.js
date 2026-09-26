@@ -103,6 +103,7 @@ const context = {
   URLSearchParams,
   URL: URLShim,
   Blob: function () {},
+  AbortController: globalThis.AbortController,
   confirm: () => true,
   setTimeout,
   clearTimeout,
@@ -345,6 +346,71 @@ const ocrDriver = `
     t("the model ships with the app, not a third-party host", String(OCR_LANG_PATH).endsWith("/models"), OCR_LANG_PATH);
     t("a state page finds the model at the site root", OCR_LANG_PATH === "https://example.test/models", OCR_LANG_PATH);
 
+    /* the crop box: aiming is the whole point, so it must stay reachable */
+    cropState = { view: { w: 100, h: 50 }, rect: { x: 90, y: 45, w: 30, h: 20 } };
+    ocrCropClamp();
+    t("the crop box cannot be dragged off the photo",
+      cropState.rect.x === 70 && cropState.rect.y + cropState.rect.h === 50, JSON.stringify(cropState.rect));
+    cropState = { view: { w: 100, h: 50 }, rect: { x: 0, y: 0, w: 1, h: 1 } };
+    ocrCropClamp();
+    t("the crop box cannot shrink to nothing", cropState.rect.w === 24 && cropState.rect.h === 24, JSON.stringify(cropState.rect));
+    cropState = { view: { w: 100, h: 50 }, rect: { x: -40, y: -40, w: 500, h: 500 } };
+    ocrCropClamp();
+    t("the crop box cannot grow past the photo",
+      cropState.rect.w === 100 && cropState.rect.h === 50 && cropState.rect.x === 0 && cropState.rect.y === 0,
+      JSON.stringify(cropState.rect));
+
+    /* whatever the server says, only NNN-NNN may reach the box */
+    var serverTests = (function () {
+      var realFetch = globalThis.fetch;
+      var sent = null;
+      var reply = null;
+      var status = 200;
+      globalThis.fetch = function (url, opts) {
+        sent = { url: String(url), body: JSON.parse(opts.body), headers: opts.headers };
+        return Promise.resolve({
+          ok: status >= 200 && status < 300,
+          status: status,
+          text: function () { return Promise.resolve(typeof reply === "string" ? reply : JSON.stringify(reply)); }
+        });
+      };
+      t("the server read is offered on a state page", serverOcrAvailable() === true);
+      var checks = [
+        ["a good reading is taken", 200, { device_id: "245-239", confidence: "high" }, "245-239"],
+        ["nothing readable comes back empty", 200, { device_id: null, raw_text: "no digits" }, ""],
+        ["a truncated id is refused", 200, { device_id: "24-5239" }, null],
+        ["an over-long id is refused", 200, { device_id: "245-2390" }, null],
+        ["letters in the id are refused", 200, { device_id: "245-2X9" }, null],
+        ["a date is refused", 200, { device_id: "2024-05-12" }, null],
+        ["a missing field is refused", 200, { note: "hi" }, ""],
+        ["a server error is refused", 500, { error: "boom" }, null],
+        ["a non-JSON answer is refused", 200, "<html>oops</html>", null]
+      ];
+      var chain = Promise.resolve();
+      checks.forEach(function (c) {
+        chain = chain.then(function () {
+          status = c[1];
+          reply = c[2];
+          return ocrReadOnServer("data:image/jpeg;base64,AAAA").then(function (out) {
+            var got = out.id;
+            t(c[0], c[3] === null ? false : got === c[3], JSON.stringify(got));
+          }, function (e) {
+            t(c[0], c[3] === null, "threw: " + e.message);
+          });
+        });
+      });
+      return chain.then(function () {
+        t("the crop is posted as a JPEG data url",
+          sent && sent.body.image.indexOf("data:image/jpeg;base64,") === 0, sent && sent.body.image.slice(0, 30));
+        t("the function is called on the project's own host",
+          sent && sent.url.endsWith("/functions/v1/" + SERVER_OCR.fn), sent && sent.url);
+        t("the request carries the anon key",
+          sent && sent.headers.apikey === SUPABASE_ANON_KEY && sent.headers.Authorization === "Bearer " + SUPABASE_ANON_KEY,
+          sent && String(sent.headers.Authorization).slice(0, 20));
+        globalThis.fetch = realFetch;
+      });
+    })();
+
     var idEl = document.getElementById("deviceId");
     var msg = function () { return document.getElementById("scanMsg").textContent; };
 
@@ -353,7 +419,7 @@ const ocrDriver = `
       recognize: function () { return Promise.resolve({ data: { text: "INEC/ZT/245-239", confidence: 88 } }); }
     };
     idEl.value = "";
-    return Promise.all([barcodeTests, platformTests]).then(function () {
+    return Promise.all([barcodeTests, platformTests, serverTests]).then(function () {
       return ocrScanFile({ name: "sticker.jpg" });
     }).then(function () {
       t("scan fills the device id", idEl.value === "245-239", JSON.stringify(idEl.value));
