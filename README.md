@@ -64,10 +64,19 @@ returns and fills that in.
   download and works with no internet at all.
 - Photos are resized to at most 3400 px on the long side before reading, so a 50-megapixel camera does
   not stall the engine.
+- Where the phone's own `TextDetector` exists, it is tried first — no download, no engine. It is behind
+  a browser flag on Android, so most phones will not have it and fall through to the engine.
 - Recognition runs entirely in the browser; **the photo is never uploaded** anywhere.
-- `tesseract.js` is fetched from jsDelivr on the **first scan only** (~8 MB of engine + language data,
-  then cached by the browser). The first scan therefore needs internet, even on a LAN install. To go
-  fully offline, drop `tesseract.min.js` into `vendor/` and point `OCR_SCRIPT_URL` in `index.html` at it.
+- The language model ships with the app: `models/eng.traineddata.gz` (2.9 MB), fetched from this site's
+  own origin. Tesseract's own default model is 10.9 MB served by `tessdata.projectnaptha.com`, measured
+  here at 70 KB/s — over two and a half minutes, and it timed out before finishing; the committed model
+  downloads in a couple of seconds and reads the digits just as well. `index.html` resolves the path
+  with `new URL("models", new URL("../../", location.href))`, since state pages are verbatim copies two
+  folders below the site root.
+- The `tesseract.js` engine itself (script + WebAssembly core, ~8 MB) is still fetched from jsDelivr on
+  the **first scan only** and then cached by the browser, so the first scan needs internet even on a LAN
+  install. To go fully offline, drop `tesseract.min.js` into `vendor/` and point `OCR_SCRIPT_URL` in
+  `index.html` at it.
 - Reads `245-239`, `245239`, `245 239`, a misread hyphen such as `245~239`, and common glyph confusions
   (`O`→`0`, `S`→`5`, `A`→`4`, `Z`→`2`, …). Digit-shaped letters and dates (`2024-05-12`) are not
   reported as Device IDs.

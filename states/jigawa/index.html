@@ -309,6 +309,19 @@
        on a LAN, drop tesseract.min.js into ./vendor/ and point OCR_SCRIPT_URL at it. */
     const OCR_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
     const OCR_LANG = "eng";
+    /* Tesseract's own default model is 10.9 MB served at a crawl from
+       tessdata.projectnaptha.com — measured here at 70 KB/s, so over two and a half
+       minutes, and it timed out before it finished. Instead this compact English
+       model (2.9 MB) is committed at models/eng.traineddata.gz and fetched from this
+       site's own origin: no third-party host to be slow, and it reads the digits
+       just as well. A relative path will not do — the Tesseract worker resolves it
+       against itself, not this page — and every state page is a verbatim copy two
+       folders below the site root, so both are handled by walking out of the state
+       folder. Tesseract then appends /eng.traineddata.gz. */
+    const OCR_LANG_PATH = new URL("models", new URL("../../", location.href)).href;
+    // The first scan has to pull that model down. Bounded, so a connection too slow
+    // to finish says so instead of sitting on "loading" for ever.
+    const OCR_LOAD_TIMEOUT = 90000;
     /* A single pass is not enough for a phone photo of a sticker: small text, a
        sideways phone, glare and a dark shell each defeat it on their own. Each pass
        re-reads the same photo with one thing changed, and the readings that several
@@ -601,6 +614,7 @@
     let ocrBusy = false;
     let ocrPassNote = "";
     let ocrCancelReject = null;
+    let ocrBusyOnce = false;
 
     /* ---------- helpers ---------- */
 
@@ -1162,16 +1176,46 @@
       ocrWorkerPromise = (async () => {
         const engine = await loadOcrEngine();
         if (typeof engine.createWorker !== "function") return null;
-        const worker = await engine.createWorker(OCR_LANG, 1, { logger: ocrProgress });
-        if (ocrAborted) {
-          if (typeof worker.terminate === "function") {
-            const done = worker.terminate();
+        let adopted = false;
+        const building = engine.createWorker(OCR_LANG, 1, {
+          logger: ocrProgress,
+          langPath: OCR_LANG_PATH,
+        });
+        // Marked here, on the same chain, so that a worker which finished building is
+        // never mistaken for one nobody is waiting for: this has to be settled before
+        // the cleanup below can run, and the timeout can win this race.
+        const creating = building.then((worker) => {
+          adopted = true;
+          return worker;
+        });
+        // Giving up on a slow download must not leave the half-built engine running.
+        building.then((orphan) => {
+          if (adopted) return;
+          try {
+            const done = orphan.terminate();
             if (done && typeof done.catch === "function") done.catch(() => {});
+          } catch (e) {}
+        }, () => {});
+        let giveUp = null;
+        try {
+          const worker = await Promise.race([
+            creating,
+            new Promise((resolve, reject) => {
+              giveUp = setTimeout(() => reject(new Error("model-timeout")), OCR_LOAD_TIMEOUT);
+            }),
+          ]);
+          if (ocrAborted) {
+            if (typeof worker.terminate === "function") {
+              const done = worker.terminate();
+              if (done && typeof done.catch === "function") done.catch(() => {});
+            }
+            return null;
           }
-          return null;
+          ocrWorker = worker;
+          return worker;
+        } finally {
+          clearTimeout(giveUp);
         }
-        ocrWorker = worker;
-        return worker;
       })();
       ocrWorkerPromise.catch(() => { ocrWorkerPromise = null; });
       return ocrWorkerPromise;
@@ -1187,6 +1231,24 @@
           if (done && typeof done.catch === "function") done.catch(() => {});
         } catch (e) {}
       }
+    }
+
+    // Where the browser has its own on-device text recogniser, use it: no download,
+    // no engine, no waiting, and it is the phone's own OCR rather than a web one.
+    // Android keeps this behind a flag, so it is an extra chance, never the only one.
+    async function ocrFromTextDetector(bitmap) {
+      try {
+        if (typeof TextDetector !== "function" || !bitmap) return "";
+        const detector = new TextDetector();
+        const blocks = await detector.detect(bitmap);
+        for (const block of blocks || []) {
+          const raw = String((block && block.rawValue) || "");
+          if (!raw) continue;
+          const found = ocrExtractDeviceId(raw);
+          if (found.id) return found.id;
+        }
+      } catch (e) {}
+      return "";
     }
 
     // A barcode on the sticker is already an exact reading, so it is tried first:
@@ -1251,6 +1313,14 @@
       if (msg && msg.status) {
         const pct = Math.round((msg.progress || 0) * 100);
         const where = ocrPassNote ? " (" + ocrPassNote + ")" : "";
+        if (!ocrBusyOnce) {
+          ocrBusyOnce = true;
+          ocrScanMsg("First scan: downloading the text reader (about 3 MB, one time only)…", "busy");
+        }
+        if (/traineddata|core|language/i.test(msg.status)) {
+          ocrScanMsg("First scan: downloading the text reader (about 3 MB, one time only)… " + pct + "%", "busy");
+          return;
+        }
         ocrScanMsg("Reading the photo" + where + "… " + msg.status + (msg.progress ? " " + pct + "%" : ""), "busy");
       }
     }
@@ -1279,6 +1349,10 @@
       const fromBarcode = await ocrFromBarcode(bitmap);
       if (fromBarcode) {
         return { id: fromBarcode, others: [], score: 100, confidence: 100, source: "barcode" };
+      }
+      const fromPlatform = await ocrFromTextDetector(bitmap);
+      if (fromPlatform) {
+        return { id: fromPlatform, others: [], score: 100, confidence: 100, source: "phone" };
       }
 
       const plane = bitmap ? ocrGrayscale(bitmap) : null;
@@ -1340,6 +1414,7 @@
         flash("The Device ID box already has a value — the scan will replace it.", true);
       }
       ocrAborted = false;
+      ocrBusyOnce = false;
       ocrSetBusy(true);
       ocrScanMsg("Loading the scanner…", "busy");
       try {
@@ -1357,7 +1432,9 @@
         const unsure = out.others.length || (out.score !== undefined && out.score < 70);
         let msg = out.source === "barcode"
           ? "Read " + out.id + " from the barcode — check it against the sticker, then save."
-          : "Scanned " + out.id + " — check it against the sticker, then save.";
+          : (out.source === "phone"
+            ? "Read " + out.id + " with the phone's own text reader — check it against the sticker, then save."
+            : "Scanned " + out.id + " — check it against the sticker, then save.");
         if (out.others.length) {
           msg = "Scanned " + out.id + " (other readings: " + out.others.join(", ") + ") — check the digits against the sticker, then save.";
         } else if (out.source !== "barcode" && out.score !== undefined && out.score < 70) {
@@ -1368,6 +1445,8 @@
       } catch (e) {
         if (ocrAborted) {
           ocrScanMsg("Scan cancelled.", "info");
+        } else if (e && /model-timeout/.test(String(e.message || e))) {
+          ocrScanMsg("The text reader could not be downloaded — the connection is too slow. Type the Device ID instead, and try the scan again on a better connection.", "error");
         } else {
           ocrScanMsg("The scanner could not start (it needs internet the first time it is used). Type the Device ID instead.", "error");
         }

@@ -87,14 +87,21 @@ const sessionStorage = {
   removeItem: (k) => { delete sessionStore[k]; },
 };
 
+const URLShim = class extends URL {};
+URLShim.createObjectURL = () => "blob:x";
+URLShim.revokeObjectURL = () => {};
+
+const location = { href: "https://example.test/states/ogun/index.html", search: "", pathname: "/states/ogun/" };
+
 const context = {
   console,
   document,
   localStorage,
   sessionStorage,
-  window: { location: { search: "", pathname: "/ogun/" }, print() {} },
+  location,
+  window: { location, print() {} },
   URLSearchParams,
-  URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },
+  URL: URLShim,
   Blob: function () {},
   confirm: () => true,
   setTimeout,
@@ -316,6 +323,28 @@ const ocrDriver = `
       });
     })();
 
+    /* the phone's own text recogniser, where the browser has one */
+    var platformTests = (function () {
+      globalThis.TextDetector = function () {
+        this.detect = function () { return Promise.resolve([{ rawValue: "INEC/ZT/245-239" }]); };
+      };
+      var read = ocrFromTextDetector({ naturalWidth: 10, naturalHeight: 10 });
+      t("the phone's own text reader is used when present", read instanceof Promise);
+      return read.then(function (id) {
+        t("device id read with the phone's own text reader", id === "245-239", id);
+        globalThis.TextDetector = undefined;
+        return ocrFromTextDetector({ naturalWidth: 10, naturalHeight: 10 });
+      }).then(function (afterRemoval) {
+        t("a phone without a text reader falls through to the engine", afterRemoval === "", afterRemoval);
+        return ocrFromTextDetector(null);
+      }).then(function (withNothing) {
+        t("no bitmap for the phone reader is handled", withNothing === "", withNothing);
+      });
+    })();
+    t("a slow model download is bounded", OCR_LOAD_TIMEOUT > 10000 && OCR_LOAD_TIMEOUT < 300000, String(OCR_LOAD_TIMEOUT));
+    t("the model ships with the app, not a third-party host", String(OCR_LANG_PATH).endsWith("/models"), OCR_LANG_PATH);
+    t("a state page finds the model at the site root", OCR_LANG_PATH === "https://example.test/models", OCR_LANG_PATH);
+
     var idEl = document.getElementById("deviceId");
     var msg = function () { return document.getElementById("scanMsg").textContent; };
 
@@ -324,7 +353,7 @@ const ocrDriver = `
       recognize: function () { return Promise.resolve({ data: { text: "INEC/ZT/245-239", confidence: 88 } }); }
     };
     idEl.value = "";
-    return barcodeTests.then(function () {
+    return Promise.all([barcodeTests, platformTests]).then(function () {
       return ocrScanFile({ name: "sticker.jpg" });
     }).then(function () {
       t("scan fills the device id", idEl.value === "245-239", JSON.stringify(idEl.value));

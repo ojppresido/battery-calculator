@@ -64,8 +64,12 @@ async function mockFetch(url, opts) {
   return { ok: true, status: 200, json };
 }
 
-const windowObj = { location: { search: "", pathname: "/ogun/" }, print() {} };
-const context = { console, document, localStorage, sessionStorage, window: windowObj, fetch: mockFetch, calls, URLSearchParams, URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} }, Blob: function () {}, confirm: () => true, setTimeout, clearTimeout };
+const location = { href: "https://example.test/states/ogun/index.html", search: "", pathname: "/states/ogun/" };
+const windowObj = { location, print() {} };
+const URLShim = class extends URL {};
+URLShim.createObjectURL = () => "blob:x";
+URLShim.revokeObjectURL = () => {};
+const context = { console, document, localStorage, sessionStorage, location, window: windowObj, fetch: mockFetch, calls, URLSearchParams, URL: URLShim, Blob: function () {}, confirm: () => true, setTimeout, clearTimeout };
 vm.createContext(context);
 
 try { vm.runInContext(pageScript, context, { filename: "page.js" }); }
